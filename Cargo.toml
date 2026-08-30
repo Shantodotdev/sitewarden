@@ -1,6 +1,31 @@
 [package]
 name = "sitewarden"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
+authors = ["SiteWarden Core Team"]
+description = "Autonomous, lightweight scheduled browser smoke testing daemon in Rust"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
+tokio = { version = "1.40", features = ["full"] }
+chromiumoxide = { version = "0.9", features = ["bytes"] }
+arc-swap = "1.7"
+notify = "8.0"
+tokio-cron-scheduler = "0.15"
+croner = "3.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+anyhow = "1.0"
+thiserror = "2.0"
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive"] }
+url = "2.5"
+validator = { version = "0.20", features = ["derive"] }
+scraper = "0.23"
+
+[dev-dependencies]
+tempfile = "3.17"
