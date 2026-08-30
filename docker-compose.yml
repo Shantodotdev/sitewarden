@@ -1,0 +1,28 @@
+# ==============================================================================
+# SiteWarden Docker Compose Specification
+# Conforms to IEEE Std 830-1998 (SRS Section 5.1 & 5.2)
+# ==============================================================================
+
+version: "3.8"
+
+services:
+  sitewarden:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sitewarden:latest
+    container_name: sitewarden
+    restart: unless-stopped
+    volumes:
+      # Bind mount configuration file for dynamic zero-downtime hot-reloading
+      - ./config.example.yaml:/app/config.yaml:ro
+      # Bind mount directory to persist failure screenshots across container recreations
+      - ./screenshots:/app/screenshots:rw
+    command: ["--config", "/app/config.yaml"]
+    environment:
+      - RUST_LOG=sitewarden=info,info
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
