@@ -1,0 +1,44 @@
+# SiteWarden Declarative Configuration Example
+# Conforms to IEEE Std 830-1998 (SRS Specification)
+
+# Cron schedule expression: 6-field (sec min hour day month weekday) or standard 5-field
+schedule: "0 0 6 * * *"
+
+# Concurrency & Resource Limits
+browser_concurrency: 2
+timeout_seconds: 30
+screenshot_dir: "./screenshots"
+
+# Declarative Test Suites
+suites:
+  - name: "Example Domain Health Check"
+    base_url: "https://example.com"
+    tests:
+      - name: "Verify Homepage Heading and Body"
+        steps:
+          - action: navigate
+            path: "/"
+          - action: wait_for_selector
+            selector: "h1"
+            timeout_ms: 5000
+          - action: assert_text
+            selector: "h1"
+            contains: "Example Domain"
+          - action: assert_visible
+            selector: "p"
+
+  - name: "Wikipedia Navigation Test"
+    base_url: "https://en.wikipedia.org"
+    tests:
+      - name: "Verify Wikipedia Main Page"
+        steps:
+          - action: navigate
+            path: "/wiki/Main_Page"
+          - action: wait_for_selector
+            selector: "#mp-welcome"
+            timeout_ms: 10000
+          - action: assert_visible
+            selector: "#mp-welcome"
+          - action: assert_text
+            selector: "#mp-welcome"
+            contains: "Welcome to Wikipedia"
