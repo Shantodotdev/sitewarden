@@ -8,13 +8,14 @@ use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::page::Page;
 use futures::StreamExt;
 use std::path::{Path, PathBuf};
+use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
 /// Wrapper around `chromiumoxide::Browser` that manages background CDP message handling
 /// and graceful shutdown.
 pub struct BrowserManager {
-    browser: Browser,
+    browser: Mutex<Option<Browser>>,
     handler_handle: JoinHandle<()>,
 }
 
@@ -36,6 +37,7 @@ impl BrowserManager {
         // - no_sandbox & disable_setuid_sandbox: needed for unprivileged Docker containers
         // - disable_dev_shm_usage: prevents /dev/shm shared memory crashes on low-resource VPS nodes
         // - headless=new: modern Chrome headless architecture supporting accurate viewport rendering
+        // - window-size=1920,1080: standard desktop viewport preventing collapsed mobile UI layouts
         // - disable background networking & syncing: minimizes CPU and network noise
         let config = config_builder
             .no_sandbox()
@@ -72,15 +74,18 @@ impl BrowserManager {
         });
 
         Ok(Self {
-            browser,
+            browser: Mutex::new(Some(browser)),
             handler_handle,
         })
     }
 
     /// Creates a dedicated clean browser tab (`about:blank`).
     pub async fn new_page(&self) -> Result<Page> {
-        let page = self
-            .browser
+        let lock = self.browser.lock().await;
+        let browser = lock
+            .as_ref()
+            .context("Browser instance is not available or already closed")?;
+        let page = browser
             .new_page("about:blank")
             .await
             .context("Failed to create new browser page")?;
@@ -128,10 +133,17 @@ impl BrowserManager {
     }
 
     /// Gracefully closes all browser pages and terminates the browser process.
-    pub async fn shutdown(mut self) {
+    pub async fn shutdown(&self) {
         info!("Shutting down headless Chromium process...");
-        // Send close command while handler is still alive with 2s timeout
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), self.browser.close()).await;
+        let maybe_browser = {
+            let mut lock = self.browser.lock().await;
+            lock.take()
+        };
+
+        if let Some(mut browser) = maybe_browser {
+            // Send close command while handler is still alive with 2s timeout
+            let _ = tokio::time::timeout(std::time::Duration::from_secs(2), browser.close()).await;
+        }
         self.handler_handle.abort();
     }
 }
