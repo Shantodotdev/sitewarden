@@ -9,11 +9,11 @@ services:
     container_name: sitewarden
     restart: unless-stopped
     volumes:
-      # Bind mount configuration file for dynamic zero-downtime hot-reloading
-      - ./config.yaml:/app/config.yaml:ro
+      # Bind mount directory so host atomic file replacements (nano/vim/sed) update instantly inside container
+      - ./:/app/config:ro
       # Bind mount directory to persist failure screenshots across container recreations
       - ./screenshots:/app/screenshots:rw
-    command: ["--config", "/app/config.yaml"]
+    command: ["--config", "/app/config/config.yaml"]
     environment:
       - RUST_LOG=sitewarden=info,chromiumoxide=error,info
     deploy:

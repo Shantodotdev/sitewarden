@@ -64,20 +64,26 @@ async fn main() -> Result<()> {
         "Initializing SiteWarden..."
     );
 
-    // Load and validate initial configuration
-    if !args.config.exists() {
+    // Resolve configuration file path with standard fallbacks
+    let config_path = if args.config.exists() {
+        args.config
+    } else if std::path::Path::new("/app/config/config.yaml").exists() {
+        PathBuf::from("/app/config/config.yaml")
+    } else if std::path::Path::new("/app/config.yaml").exists() {
+        PathBuf::from("/app/config.yaml")
+    } else {
         error!(
             path = ?args.config,
             "Configuration file not found. Please provide a valid config file."
         );
         std::process::exit(1);
-    }
+    };
 
-    let initial_config = match AppConfig::from_file(&args.config) {
+    let initial_config = match AppConfig::from_file(&config_path) {
         Ok(cfg) => cfg,
         Err(err) => {
             error!(
-                path = ?args.config,
+                path = ?config_path,
                 error = %err,
                 "Fatal configuration parsing or validation error"
             );
@@ -112,7 +118,7 @@ async fn main() -> Result<()> {
 
     // Initialize Config Watcher for zero-downtime hot-reloading
     let (_watcher, mut reload_rx) =
-        match ConfigWatcher::new(&args.config, Arc::clone(&shared_config)) {
+        match ConfigWatcher::new(&config_path, Arc::clone(&shared_config)) {
             Ok(w) => w,
             Err(err) => {
                 error!(error = %err, "Failed to initialize configuration file watcher");
