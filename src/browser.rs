@@ -36,14 +36,21 @@ impl BrowserManager {
         // Apply mandatory flags per SRS FR-3.1 & cloud VPS best practices:
         // - no_sandbox & disable_setuid_sandbox: needed for unprivileged Docker containers
         // - disable_dev_shm_usage: prevents /dev/shm shared memory crashes on low-resource VPS nodes
+        // - no-zygote & renderer-process-limit=2: prevents spawning hundreds of idle worker threads/PIDs
+        // - disable-gpu & disable-software-rasterizer: minimizes memory overhead
+        // - js-flags: bounds V8 JavaScript runtime heap to 128MB
         // - headless=new: modern Chrome headless architecture supporting accurate viewport rendering
         // - window-size=1920,1080: standard desktop viewport preventing collapsed mobile UI layouts
-        // - disable background networking & syncing: minimizes CPU and network noise
         let config = config_builder
             .no_sandbox()
             .arg("--disable-setuid-sandbox")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-gpu")
+            .arg("--disable-software-rasterizer")
+            .arg("--no-zygote")
+            .arg("--renderer-process-limit=2")
+            .arg("--js-flags=--max-old-space-size=128")
+            .arg("--disable-features=Translate,OptimizationHints,MediaRouter,BackForwardCache")
             .arg("--headless=new")
             .arg("--window-size=1920,1080")
             .arg("--disable-background-networking")

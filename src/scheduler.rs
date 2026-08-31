@@ -3,6 +3,9 @@
 //! Conforms to IEEE Std 830-1998 (SRS Section 3.2, 3.3, 3.4).
 //! Orchestrates scheduled and on-demand test runs, throttles concurrent browser tabs
 //! via `futures::stream::buffer_unordered`, manages failure screenshots, and dispatches failure alerts.
+//!
+//! Implements an on-demand Chromium lifecycle: launches the browser only when executing tests
+//! and terminates it immediately upon cycle completion to maintain an ultra-low (<15MB) idle footprint.
 
 use crate::alert::{AlertDispatcher, FailureAlert};
 use crate::browser::BrowserManager;
@@ -19,10 +22,9 @@ use tokio::sync::Mutex;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, warn};
 
-/// Orchestrates test execution across all configured test suites.
+/// Orchestrates test execution across all configured test suites with on-demand browser lifecycle.
 pub async fn run_all_suites(
     shared_config: &Arc<ArcSwap<AppConfig>>,
-    browser: &Arc<BrowserManager>,
     alert_dispatcher: &AlertDispatcher,
 ) -> bool {
     let config = shared_config.load_full();
@@ -36,18 +38,30 @@ pub async fn run_all_suites(
         "Starting smoke test execution cycle"
     );
 
+    // Launch headless Chromium on-demand for this test cycle only
+    let browser = match BrowserManager::launch().await {
+        Ok(bm) => Arc::new(bm),
+        Err(err) => {
+            error!(error = %err, "Failed to launch on-demand Chromium for test cycle");
+            return false;
+        }
+    };
+
     let mut all_suites_passed = true;
 
     for suite in &config.suites {
-        let suite_passed = run_suite(suite, &config, browser, alert_dispatcher).await;
+        let suite_passed = run_suite(suite, &config, &browser, alert_dispatcher).await;
         if !suite_passed {
             all_suites_passed = false;
         }
     }
 
+    // Immediately shut down browser process and reclaim memory
+    browser.shutdown().await;
+
     info!(
         all_passed = all_suites_passed,
-        "Smoke test execution cycle completed"
+        "Smoke test execution cycle completed. Browser resources released."
     );
 
     all_suites_passed
@@ -238,7 +252,6 @@ fn sanitize_filename(name: &str) -> String {
 /// Initializes and starts the background cron scheduler daemon.
 pub async fn start_scheduler(
     shared_config: Arc<ArcSwap<AppConfig>>,
-    browser: Arc<BrowserManager>,
     alert_dispatcher: AlertDispatcher,
 ) -> Result<JobScheduler> {
     let scheduler = JobScheduler::new()
@@ -250,7 +263,6 @@ pub async fn start_scheduler(
     drop(config);
 
     let sched_shared_config = Arc::clone(&shared_config);
-    let sched_browser = Arc::clone(&browser);
     let sched_alert = alert_dispatcher.clone();
 
     // Mutex lock to prevent overlapping test runs if a test cycle exceeds the cron trigger interval
@@ -258,7 +270,6 @@ pub async fn start_scheduler(
 
     let job = Job::new_async(cron_expr.as_str(), move |_uuid, _lock| {
         let conf = Arc::clone(&sched_shared_config);
-        let brow = Arc::clone(&sched_browser);
         let alert = sched_alert.clone();
         let exec_lock = Arc::clone(&execution_lock);
 
@@ -271,8 +282,8 @@ pub async fn start_scheduler(
                 }
             };
 
-            info!("Cron trigger activated. Starting test execution...");
-            run_all_suites(&conf, &brow, &alert).await;
+            info!("Cron trigger activated. Starting on-demand test execution...");
+            run_all_suites(&conf, &alert).await;
         })
     })
     .with_context(|| format!("Failed to parse cron schedule expression: '{}'", cron_expr))?;
