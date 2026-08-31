@@ -1,1 +1,6 @@
 /target
+/screenshots
+perf.data
+perf.data.old
+*.log
+
