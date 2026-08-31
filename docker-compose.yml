@@ -10,7 +10,7 @@ services:
     restart: unless-stopped
     volumes:
       # Bind mount configuration file for dynamic zero-downtime hot-reloading
-      - ./config.example.yaml:/app/config.yaml:ro
+      - ./config.yaml:/app/config.yaml:ro
       # Bind mount directory to persist failure screenshots across container recreations
       - ./screenshots:/app/screenshots:rw
     command: ["--config", "/app/config.yaml"]
