@@ -3,8 +3,6 @@
 # Conforms to IEEE Std 830-1998 (SRS Section 5.1 & 5.2)
 # ==============================================================================
 
-version: "3.8"
-
 services:
   sitewarden:
     image: ghcr.io/shantodotdev/sitewarden:latest
@@ -17,7 +15,7 @@ services:
       - ./screenshots:/app/screenshots:rw
     command: ["--config", "/app/config.yaml"]
     environment:
-      - RUST_LOG=sitewarden=info,info
+      - RUST_LOG=sitewarden=info,chromiumoxide=error,info
     deploy:
       resources:
         limits:

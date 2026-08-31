@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Set Chromium binary location environment variable
 ENV CHROME_BIN=/usr/bin/chromium \
-    RUST_LOG=sitewarden=info,info
+    RUST_LOG=sitewarden=info,chromiumoxide=error,info
 
 WORKDIR /app
 
