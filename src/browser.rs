@@ -26,11 +26,15 @@ impl BrowserManager {
 
         let mut config_builder = BrowserConfig::builder();
 
-        // Check if CHROME_BIN or CHROMIUM_PATH is set, or fallback to standard system locations
+        // Auto-detect browser binary: prioritize chrome-headless-shell, then CHROME_BIN / system chromium
         if let Ok(path) = std::env::var("CHROME_BIN") {
             config_builder = config_builder.chrome_executable(path);
         } else if let Ok(path) = std::env::var("CHROMIUM_PATH") {
             config_builder = config_builder.chrome_executable(path);
+        } else if std::path::Path::new("/usr/bin/chrome-headless-shell").exists() {
+            config_builder = config_builder.chrome_executable("/usr/bin/chrome-headless-shell");
+        } else if std::path::Path::new("/usr/bin/chromium-headless-shell").exists() {
+            config_builder = config_builder.chrome_executable("/usr/bin/chromium-headless-shell");
         }
 
         // Apply mandatory flags per SRS FR-3.1 & cloud VPS best practices:
@@ -38,6 +42,7 @@ impl BrowserManager {
         // - disable_dev_shm_usage: prevents /dev/shm shared memory crashes on low-resource VPS nodes
         // - no-zygote & renderer-process-limit=2: prevents spawning hundreds of idle worker threads/PIDs
         // - disable-gpu & disable-software-rasterizer: minimizes memory overhead
+        // - disk-cache-dir=/dev/null: eliminates temporary disk I/O caches
         // - js-flags: bounds V8 JavaScript runtime heap to 128MB
         // - headless=new: modern Chrome headless architecture supporting accurate viewport rendering
         // - window-size=1920,1080: standard desktop viewport preventing collapsed mobile UI layouts
@@ -49,6 +54,10 @@ impl BrowserManager {
             .arg("--disable-software-rasterizer")
             .arg("--no-zygote")
             .arg("--renderer-process-limit=2")
+            .arg("--disk-cache-dir=/dev/null")
+            .arg("--disk-cache-size=1")
+            .arg("--media-cache-size=1")
+            .arg("--disable-application-cache")
             .arg("--js-flags=--max-old-space-size=128")
             .arg("--disable-features=Translate,OptimizationHints,MediaRouter,BackForwardCache")
             .arg("--headless=new")
