@@ -65,7 +65,7 @@ jobs:
 
       - name: Build and push Docker image
         if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
@@ -96,6 +96,5 @@ jobs:
 
       - name: Pull image and restart container
         run: |
-          # Pull pre-built binary image from GHCR (takes ~2 seconds, zero compilation on VPS)
           docker compose pull
           docker compose up -d
