@@ -276,6 +276,16 @@ async fn run_single_test_with_recovery(
                     "Failed to capture failure screenshot"
                 );
             }
+        };
+
+        if let Some(ref failure) = result.failure {
+            error!(
+                test = %test_case.name,
+                step = failure.step_index,
+                action = %failure.action_type,
+                error = %failure.error_message,
+                "Test step failed"
+            );
         }
     }
 
