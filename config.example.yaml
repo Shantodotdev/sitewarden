@@ -7,7 +7,7 @@ schedule: "0 0 6 * * *"
 # Concurrency & Resource Limits
 browser_concurrency: 2
 timeout_seconds: 30
-screenshot_dir: "./screenshots"
+screenshot_dir: "/app/screenshots"
 
 # Declarative Test Suites
 suites:
