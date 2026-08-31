@@ -7,10 +7,7 @@ version: "3.8"
 
 services:
   sitewarden:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: sitewarden:latest
+    image: ghcr.io/shantodotdev/sitewarden:latest
     container_name: sitewarden
     restart: unless-stopped
     volumes:
