@@ -45,9 +45,9 @@ RUN groupadd -r sitewarden && useradd -r -g sitewarden -u 1000 -d /app sitewarde
     && mkdir -p /app/screenshots \
     && chown -R sitewarden:sitewarden /app
 
-# Copy compiled binary from builder stage
-COPY --from=builder /usr/src/sitewarden/target/release/sitewarden /app/sitewarden
-RUN chmod +x /app/sitewarden
+# Copy compiled binary from builder stage to system PATH
+COPY --from=builder /usr/src/sitewarden/target/release/sitewarden /usr/local/bin/sitewarden
+RUN chmod +x /usr/local/bin/sitewarden && ln -s /usr/local/bin/sitewarden /app/sitewarden
 
 # Switch to non-root user
 USER sitewarden
