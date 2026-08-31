@@ -439,3 +439,25 @@ pub fn validate_css_selector(selector: &str) -> Result<(), String> {
         .map(|_| ())
         .map_err(|e| format!("Invalid CSS selector '{}': {:?}", s, e))
 }
+
+impl TestCase {
+    /// Returns true if this test case only contains static steps (Navigate, AssertText, AssertVisible)
+    /// and does not require JavaScript execution or interactive browser operations (Click, TypeText, WaitForSelector).
+    pub fn is_static_executable(&self) -> bool {
+        self.steps.iter().all(|step| match step {
+            TestStep::Navigate { .. } => true,
+            TestStep::AssertText { .. } => true,
+            TestStep::AssertVisible { .. } => true,
+            TestStep::WaitForSelector { .. }
+            | TestStep::Click { .. }
+            | TestStep::TypeText { .. } => false,
+        })
+    }
+}
+
+impl TestSuite {
+    /// Returns true if all test cases in this suite are executable via the pure-Rust static engine.
+    pub fn is_all_static(&self) -> bool {
+        self.tests.iter().all(|test| test.is_static_executable())
+    }
+}

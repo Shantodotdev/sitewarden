@@ -1,20 +1,20 @@
 //! Scheduling, cron evaluation, and concurrent test execution pipeline.
 //!
 //! Conforms to IEEE Std 830-1998 (SRS Section 3.2, 3.3, 3.4).
-//! Orchestrates scheduled and on-demand test runs, throttles concurrent browser tabs
-//! via `futures::stream::buffer_unordered`, manages failure screenshots, and dispatches failure alerts.
-//!
-//! Implements an on-demand Chromium lifecycle: launches the browser only when executing tests
-//! and terminates it immediately upon cycle completion to maintain an ultra-low (<15MB) idle footprint.
+//! Orchestrates scheduled and on-demand test runs using a Hybrid Execution Architecture:
+//! - Pure-Rust Static Engine (`reqwest` + `scraper`) for non-interactive tests (~2MB RAM, ~5ms latency)
+//! - On-Demand Headless Browser Engine for interactive steps (Click, TypeText, WaitForSelector)
 
 use crate::alert::{AlertDispatcher, FailureAlert};
 use crate::browser::BrowserManager;
 use crate::config::{AppConfig, TestCase, TestSuite};
 use crate::engine::{execute_test_case, TestCaseResult};
+use crate::static_engine::execute_static_test_case;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
 use chrono::Utc;
 use futures::stream::{self, StreamExt};
+use reqwest::Client;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, warn};
 
-/// Orchestrates test execution across all configured test suites with on-demand browser lifecycle.
+/// Orchestrates test execution across all configured test suites with hybrid execution.
 pub async fn run_all_suites(
     shared_config: &Arc<ArcSwap<AppConfig>>,
     alert_dispatcher: &AlertDispatcher,
@@ -38,30 +38,51 @@ pub async fn run_all_suites(
         "Starting smoke test execution cycle"
     );
 
-    // Launch headless Chromium on-demand for this test cycle only
-    let browser = match BrowserManager::launch().await {
-        Ok(bm) => Arc::new(bm),
-        Err(err) => {
-            error!(error = %err, "Failed to launch on-demand Chromium for test cycle");
-            return false;
+    let any_dynamic = config.suites.iter().any(|s| !s.is_all_static());
+    let http_client = Arc::new(Client::builder().build().unwrap_or_default());
+
+    // If dynamic browser execution is required, launch browser on-demand for this cycle
+    let browser = if any_dynamic {
+        info!("Interactive tests detected. Launching on-demand Chromium engine...");
+        match BrowserManager::launch().await {
+            Ok(bm) => Some(Arc::new(bm)),
+            Err(err) => {
+                error!(error = %err, "Failed to launch on-demand Chromium for dynamic test cycle");
+                return false;
+            }
         }
+    } else {
+        info!(
+            "All tests are static-executable. Running in pure-Rust engine (zero browser overhead)."
+        );
+        None
     };
 
     let mut all_suites_passed = true;
 
     for suite in &config.suites {
-        let suite_passed = run_suite(suite, &config, &browser, alert_dispatcher).await;
+        let suite_passed = run_suite(
+            suite,
+            &config,
+            browser.as_ref(),
+            &http_client,
+            alert_dispatcher,
+        )
+        .await;
         if !suite_passed {
             all_suites_passed = false;
         }
     }
 
-    // Immediately shut down browser process and reclaim memory
-    browser.shutdown().await;
+    // Immediately shut down browser process if one was launched
+    if let Some(b) = browser {
+        b.shutdown().await;
+        info!("Released on-demand browser resources back to system.");
+    }
 
     info!(
         all_passed = all_suites_passed,
-        "Smoke test execution cycle completed. Browser resources released."
+        "Smoke test execution cycle completed."
     );
 
     all_suites_passed
@@ -71,7 +92,8 @@ pub async fn run_all_suites(
 async fn run_suite(
     suite: &TestSuite,
     config: &AppConfig,
-    browser: &Arc<BrowserManager>,
+    browser: Option<&Arc<BrowserManager>>,
+    http_client: &Arc<Client>,
     alert_dispatcher: &AlertDispatcher,
 ) -> bool {
     info!(
@@ -79,6 +101,7 @@ async fn run_suite(
         test_count = suite.tests.len(),
         step_count = suite.total_steps(),
         base_url = %suite.base_url,
+        is_static = suite.is_all_static(),
         "Executing test suite"
     );
 
@@ -88,26 +111,52 @@ async fn run_suite(
     let timeout_secs = config.timeout_seconds;
     let screenshot_dir = config.screenshot_dir.clone();
 
-    // Stream test executions with bounded concurrency.
-    // buffer_unordered ensures that at most `browser_concurrency` tests run simultaneously,
-    // keeping memory footprint strictly capped within VPS constraints (<250MB RSS).
+    // Stream test executions with bounded concurrency
     let results: Vec<TestCaseResult> = stream::iter(suite.tests.clone())
         .map(|test_case| {
-            let browser = Arc::clone(browser);
+            let browser = browser.cloned();
+            let http_client = Arc::clone(http_client);
             let base_url = base_url.clone();
             let suite_name = suite_name.clone();
             let screenshot_dir = screenshot_dir.clone();
 
             async move {
-                run_single_test_with_recovery(
-                    &test_case,
-                    &base_url,
-                    &suite_name,
-                    timeout_secs,
-                    &screenshot_dir,
-                    &browser,
-                )
-                .await
+                if test_case.is_static_executable() {
+                    // Pure-Rust static execution
+                    execute_static_test_case(
+                        &http_client,
+                        &base_url,
+                        &test_case.name,
+                        &test_case.steps,
+                    )
+                    .await
+                } else if let Some(ref b) = browser {
+                    // Dynamic browser execution
+                    run_single_test_with_recovery(
+                        &test_case,
+                        &base_url,
+                        &suite_name,
+                        timeout_secs,
+                        &screenshot_dir,
+                        b,
+                    )
+                    .await
+                } else {
+                    // Fallback safety if no browser was provisioned
+                    TestCaseResult {
+                        test_name: test_case.name.clone(),
+                        success: false,
+                        duration: Duration::ZERO,
+                        failure: Some(crate::engine::StepFailure {
+                            step_index: 0,
+                            action_type: "engine_routing".to_string(),
+                            error_message:
+                                "Dynamic test encountered but browser engine was not initialized"
+                                    .to_string(),
+                            screenshot_path: None,
+                        }),
+                    }
+                }
             }
         })
         .buffer_unordered(concurrency)
@@ -146,7 +195,7 @@ async fn run_suite(
     suite_success
 }
 
-/// Executes a single test case inside a dedicated tab, with strict timeout and failure screenshot capture.
+/// Executes a single dynamic test case inside a dedicated tab, with strict timeout and failure screenshot capture.
 async fn run_single_test_with_recovery(
     test_case: &TestCase,
     base_url: &str,
@@ -282,7 +331,7 @@ pub async fn start_scheduler(
                 }
             };
 
-            info!("Cron trigger activated. Starting on-demand test execution...");
+            info!("Cron trigger activated. Starting hybrid test execution...");
             run_all_suites(&conf, &alert).await;
         })
     })

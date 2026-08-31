@@ -7,4 +7,5 @@ pub mod browser;
 pub mod config;
 pub mod engine;
 pub mod scheduler;
+pub mod static_engine;
 pub mod watcher;
