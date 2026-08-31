@@ -1,11 +1,15 @@
 //! Dynamic configuration file watcher and atomic hot-reloading.
 //!
 //! Conforms to IEEE Std 830-1998 (SRS FR-1.2).
-//! Watches `config.yaml` using `notify`, debounces file modifications for 300ms,
-//! and atomically updates shared application state via `arc_swap::ArcSwap`.
+//! Watches `config.yaml` using a hybrid approach:
+//! 1. Native `inotify` file system events for instantaneous local edits.
+//! 2. 1-second mtime/content-hash polling fallback to guarantee reliable detection
+//!    across Docker bind-mounts and atomic file replacements from editors (Vim, Nano, VS Code).
+//!
+//! Updates shared application state atomically via `arc_swap::ArcSwap` with zero daemon downtime.
 
 use crate::config::AppConfig;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use arc_swap::ArcSwap;
 use notify::{
     event::ModifyKind, Config as NotifyConfig, Event, EventKind, RecommendedWatcher, RecursiveMode,
@@ -13,18 +17,21 @@ use notify::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc;
 use tracing::{error, info, trace};
 
 /// Debounce period for file write events before triggering a reload.
 pub const RELOAD_DEBOUNCE_DURATION: Duration = Duration::from_millis(300);
 
+/// Polling fallback interval to ensure Docker bind mounts detect modifications reliably.
+pub const POLLING_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
+
 /// Manages filesystem watching and atomic state swapping for runtime configuration.
 pub struct ConfigWatcher {
     config_path: PathBuf,
     shared_config: Arc<ArcSwap<AppConfig>>,
-    _watcher: RecommendedWatcher,
+    _watcher: Option<RecommendedWatcher>,
 }
 
 impl ConfigWatcher {
@@ -37,68 +44,85 @@ impl ConfigWatcher {
         let path = config_path.as_ref().to_path_buf();
         let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
 
-        let (tx, rx) = mpsc::channel(16);
+        let (event_tx, mut event_rx) = mpsc::channel::<()>(16);
         let (reload_tx, reload_rx) = mpsc::channel(16);
+
+        // 1. Setup inotify watcher (best-effort for native environments)
+        let notify_tx = event_tx.clone();
 
         let mut watcher = RecommendedWatcher::new(
             move |res: notify::Result<Event>| {
                 if let Ok(event) = res {
-                    let _ = tx.blocking_send(event);
+                    let is_relevant = matches!(
+                        event.kind,
+                        EventKind::Modify(ModifyKind::Data(_))
+                            | EventKind::Modify(ModifyKind::Name(_))
+                            | EventKind::Modify(ModifyKind::Any)
+                            | EventKind::Create(_)
+                    );
+                    if is_relevant {
+                        let _ = notify_tx.blocking_send(());
+                    }
                 }
             },
             NotifyConfig::default(),
         )
-        .context("Failed to initialize notify filesystem watcher")?;
+        .ok();
 
-        // Watch the parent directory rather than the file directly.
-        // This guarantees change events are captured even when editors (Vim, VS Code)
-        // perform atomic file replacement via temporary swapfiles and renames.
-        let watch_target = if let Some(parent) = canonical_path.parent() {
-            parent.to_path_buf()
-        } else {
-            canonical_path.clone()
-        };
-
-        watcher
-            .watch(&watch_target, RecursiveMode::NonRecursive)
-            .with_context(|| format!("Failed to watch path: {:?}", watch_target))?;
+        if let Some(ref mut w) = watcher {
+            // Watch the direct file path
+            let _ = w.watch(&canonical_path, RecursiveMode::NonRecursive);
+            // Also watch parent directory if available for atomic rename capture
+            if let Some(parent) = canonical_path.parent() {
+                let _ = w.watch(parent, RecursiveMode::NonRecursive);
+            }
+        }
 
         info!(
             path = ?canonical_path,
-            watched_dir = ?watch_target,
-            "Registered filesystem watcher for configuration"
+            "Registered hybrid filesystem watcher for live configuration"
         );
 
-        // Spawn async event loop to handle inotify events and debounce rapid saves
+        // 2. Setup background polling fallback task for Docker bind-mount resilience
+        let poll_path = canonical_path.clone();
+        let poll_tx = event_tx;
+
+        tokio::spawn(async move {
+            let mut last_mtime: Option<SystemTime> = std::fs::metadata(&poll_path)
+                .and_then(|m| m.modified())
+                .ok();
+            let mut last_content = std::fs::read_to_string(&poll_path).unwrap_or_default();
+
+            loop {
+                tokio::time::sleep(POLLING_FALLBACK_INTERVAL).await;
+
+                let current_mtime = std::fs::metadata(&poll_path)
+                    .and_then(|m| m.modified())
+                    .ok();
+
+                if current_mtime != last_mtime {
+                    // Check if content actually changed
+                    if let Ok(current_content) = std::fs::read_to_string(&poll_path) {
+                        if current_content != last_content {
+                            last_mtime = current_mtime;
+                            last_content = current_content;
+                            trace!("Polling fallback detected modification in config file");
+                            let _ = poll_tx.send(()).await;
+                        }
+                    }
+                }
+            }
+        });
+
+        // 3. Central Debounce and Hot-Reload Processing Task
         let loop_path = canonical_path.clone();
         let loop_shared = shared_config.clone();
 
         tokio::spawn(async move {
-            let mut event_rx = rx;
+            while event_rx.recv().await.is_some() {
+                trace!("Detected config modification event. Debouncing...");
 
-            while let Some(event) = event_rx.recv().await {
-                // Filter specifically for content modification, atomic renames, and file recreation.
-                // Many text editors write to a temporary swapfile and atomically rename/recreate
-                // the target file on save, which triggers Create, Modify(Data), or Modify(Name).
-                let is_relevant = match event.kind {
-                    EventKind::Modify(ModifyKind::Data(_))
-                    | EventKind::Modify(ModifyKind::Name(_))
-                    | EventKind::Modify(ModifyKind::Any)
-                    | EventKind::Create(_) => event
-                        .paths
-                        .iter()
-                        .any(|p| p.file_name() == loop_path.file_name() || p == &loop_path),
-                    _ => false,
-                };
-
-                if !is_relevant {
-                    continue;
-                }
-
-                trace!("Detected file modification event. Starting 300ms debounce...");
-
-                // Debounce window: wait for editor to finish writing and flush buffers,
-                // then drain any residual queued events for the same edit cycle.
+                // Debounce window to let editor finish writing
                 tokio::time::sleep(RELOAD_DEBOUNCE_DURATION).await;
                 while event_rx.try_recv().is_ok() {}
 
@@ -107,17 +131,26 @@ impl ConfigWatcher {
                 // Attempt to parse and validate new configuration
                 match AppConfig::from_file(&loop_path) {
                     Ok(new_config) => {
-                        // Atomic pointer swap: wait-free for all concurrent readers (schedulers/workers)
+                        let suites_count = new_config.suites.len();
+                        let total_tests = new_config.total_tests();
+                        let schedule = new_config.schedule.clone();
+
+                        // Atomic pointer swap: wait-free for all concurrent readers
                         loop_shared.store(Arc::new(new_config));
-                        info!("Configuration hot-reloaded successfully into memory via ArcSwap");
+
+                        info!(
+                            schedule = %schedule,
+                            suites_count = suites_count,
+                            total_tests = total_tests,
+                            "Configuration hot-reloaded successfully into memory via ArcSwap"
+                        );
                         let _ = reload_tx.send(()).await;
                     }
                     Err(err) => {
-                        // Resilience: log detailed error with line context, but strictly preserve
-                        // the previous valid configuration in memory so the daemon keeps running.
+                        // Resilience: log detailed error with context, but preserve active memory state
                         error!(
                             error = %err,
-                            "Hot-reload failed! Retaining current active configuration in memory."
+                            "Hot-reload failed validation! Retaining current active configuration in memory."
                         );
                     }
                 }

@@ -120,22 +120,64 @@ async fn main() -> Result<()> {
             }
         };
 
-    // Spawn reload listener task to record runtime configuration swaps
-    tokio::spawn(async move {
-        while reload_rx.recv().await.is_some() {
-            info!("Live configuration update applied in memory.");
-        }
-    });
-
     // Start background cron scheduler daemon (Chromium is spawned on-demand per schedule trigger)
-    let mut scheduler =
+    let scheduler_handle = Arc::new(tokio::sync::Mutex::new(
         match start_scheduler(Arc::clone(&shared_config), alert_dispatcher.clone()).await {
             Ok(sched) => sched,
             Err(err) => {
                 error!(error = %err, "Failed to start cron scheduler");
                 std::process::exit(1);
             }
-        };
+        },
+    ));
+
+    // Spawn reload listener task to record runtime configuration swaps and update scheduler if schedule changed
+    let reload_shared_config = Arc::clone(&shared_config);
+    let reload_alert_dispatcher = alert_dispatcher.clone();
+    let reload_scheduler_handle = Arc::clone(&scheduler_handle);
+
+    tokio::spawn(async move {
+        let mut last_schedule = reload_shared_config.load().schedule.clone();
+
+        while reload_rx.recv().await.is_some() {
+            let current_config = reload_shared_config.load();
+            info!(
+                suites = current_config.suites.len(),
+                tests = current_config.total_tests(),
+                schedule = %current_config.schedule,
+                "Live configuration hot-reload applied to memory."
+            );
+
+            if current_config.schedule != last_schedule {
+                info!(
+                    old_schedule = %last_schedule,
+                    new_schedule = %current_config.schedule,
+                    "Cron schedule expression changed. Rescheduling background daemon..."
+                );
+
+                let mut sched_lock = reload_scheduler_handle.lock().await;
+                if let Err(err) = sched_lock.shutdown().await {
+                    warn!(error = %err, "Issue stopping previous scheduler during reschedule");
+                }
+
+                match start_scheduler(
+                    Arc::clone(&reload_shared_config),
+                    reload_alert_dispatcher.clone(),
+                )
+                .await
+                {
+                    Ok(new_sched) => {
+                        *sched_lock = new_sched;
+                        last_schedule = current_config.schedule.clone();
+                        info!("Scheduler successfully updated with new cron schedule.");
+                    }
+                    Err(err) => {
+                        error!(error = %err, "Failed to restart scheduler with new cron expression");
+                    }
+                }
+            }
+        }
+    });
 
     info!("SiteWarden daemon is actively monitoring and awaiting schedule triggers. (Press Ctrl+C to terminate)");
 
@@ -145,7 +187,8 @@ async fn main() -> Result<()> {
     info!("Termination signal received. Starting graceful shutdown...");
 
     // Gracefully stop scheduler loop to prevent new scheduled runs
-    if let Err(err) = scheduler.shutdown().await {
+    let mut sched_lock = scheduler_handle.lock().await;
+    if let Err(err) = sched_lock.shutdown().await {
         warn!(error = %err, "Scheduler shutdown encountered an issue");
     }
 
