@@ -75,8 +75,8 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
-            # Latest only on formal semver releases
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            # Latest only on formal non-prerelease tags (e.g. v0.1.0, not v0.1.0-rc.2)
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
 
       - name: Build & Push Production Image
         uses: docker/build-push-action@v6
@@ -95,4 +95,5 @@ jobs:
         with:
           generate_release_notes: true
           draft: false
-          prerelease: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
