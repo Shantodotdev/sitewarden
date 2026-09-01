@@ -4,7 +4,7 @@
 > Continuously monitors web apps, validates DOM assertions, captures failure screenshots, and consumes **<30 MB RAM**.
 
 [![CI & Container Build](https://github.com/Shantodotdev/sitewarden/actions/workflows/ci.yml/badge.svg)](https://github.com/Shantodotdev/sitewarden/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#-license)
 [![Docker Image](https://img.shields.io/badge/Docker-ghcr.io%2Fshantodotdev%2Fsitewarden-green.svg)](https://github.com/Shantodotdev/sitewarden/pkgs/container/sitewarden)
 
 ---
@@ -130,5 +130,10 @@ docker compose up -d
 ---
 
 ## 📄 License
+ 
+Dual-licensed under either:
 
-Dual-licensed under either **MIT** or **Apache-2.0** at your option.
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
