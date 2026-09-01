@@ -24,14 +24,6 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Install Headless Chromium & Fonts
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            chromium-browser \
-            fonts-liberation \
-            ca-certificates
-
       - name: Install Stable Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -41,7 +33,7 @@ jobs:
       - name: Execute Cargo Tests (Unit + Integration + Doc-tests)
         run: cargo test --all-targets --all-features --verbose
         env:
-          CHROME_BIN: /usr/bin/chromium-browser
+          CHROME_BIN: /usr/bin/google-chrome
 
   # ============================================================================
   # Stage 2: Multi-Platform Production Docker Build & Publish to GHCR
