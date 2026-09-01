@@ -6,9 +6,10 @@
 
 set -e
 
+REPO="Shantodotdev/sitewarden"
 INSTALL_DIR="/opt/sitewarden"
-COMPOSE_URL="https://raw.githubusercontent.com/Shantodotdev/sitewarden/master/docker-compose.yml"
-CONFIG_URL="https://raw.githubusercontent.com/Shantodotdev/sitewarden/master/config.example.yaml"
+COMPOSE_URL="https://raw.githubusercontent.com/${REPO}/master/docker-compose.yml"
+CONFIG_URL="https://raw.githubusercontent.com/${REPO}/master/config.example.yaml"
 
 # Colors for terminal output
 BOLD="\033[1m"
@@ -73,5 +74,6 @@ echo -e "${BOLD}${GREEN}  🎉 SiteWarden is actively monitoring your sites!    
 echo -e "${BOLD}${GREEN}======================================================${NC}\n"
 echo -e "  • ${BOLD}Config file:${NC}    ${INSTALL_DIR}/config.yaml ${YELLOW}(Hot-reloads automatically on save)${NC}"
 echo -e "  • ${BOLD}View live logs:${NC} cd ${INSTALL_DIR} && docker compose logs -f"
-echo -e "  • ${BOLD}Run once now:${NC}   docker exec -it sitewarden sitewarden --run-once"
+echo -e "  • ${BOLD}Run tests now:${NC}  docker exec -it sitewarden sitewarden test"
+echo -e "  • ${BOLD}View status:${NC}    docker exec -it sitewarden sitewarden status"
 echo -e "  • ${BOLD}Screenshots:${NC}    ${INSTALL_DIR}/screenshots/\n"

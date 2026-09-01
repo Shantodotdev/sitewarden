@@ -10,7 +10,7 @@
 //! 3. Inspecting the host runtime environment (detecting containerized Docker VPS vs standalone native binary).
 //! 4. Generating precise, copy-pasteable 1-line upgrade commands tailored to the detected environment.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::Client;
 use serde::Deserialize;
 use std::path::Path;
@@ -78,64 +78,99 @@ pub fn detect_environment() -> EnvironmentType {
     }
 }
 
+pub const TAGS_API_URL: &str = "https://api.github.com/repos/Shantodotdev/sitewarden/tags";
+
+/// Minimal schema representing a GitHub tag entry.
+#[derive(Debug, Deserialize)]
+struct GitHubTag {
+    name: String,
+}
+
 /// Queries the GitHub REST API to determine if a newer version of SiteWarden has been published.
 ///
 /// # Network Constraints & Fail-Open Behavior
 /// Uses a strict 5-second connection timeout and custom `User-Agent` header as mandated by GitHub API guidelines.
-/// If the network request fails or the repository has no published releases yet, returns an `UpdateInfo`
-/// indicating that the current version is up-to-date rather than failing fatally.
+/// 1. Queries `/releases/latest` for formal published releases and changelog notes.
+/// 2. If `/releases/latest` returns 404 (e.g. only git tags exist), falls back to querying `/tags`.
+/// 3. If neither exists or the network request fails, gracefully returns the current version.
 pub async fn check_latest_release(client: &Client) -> Result<UpdateInfo> {
     let current_version = env!("CARGO_PKG_VERSION").to_string();
 
+    let user_agent = format!(
+        "SiteWarden/{} (https://github.com/{})",
+        current_version, GITHUB_REPO
+    );
+
     let request = client
         .get(RELEASES_API_URL)
-        .header(
-            "User-Agent",
-            format!(
-                "SiteWarden/{} (https://github.com/{})",
-                current_version, GITHUB_REPO
-            ),
-        )
+        .header("User-Agent", &user_agent)
         .header("Accept", "application/vnd.github.v3+json")
         .timeout(Duration::from_secs(5));
 
-    let response = request
-        .send()
-        .await
-        .context("Failed to connect to GitHub Releases API")?;
+    if let Ok(response) = request.send().await {
+        if response.status().is_success() {
+            if let Ok(body_text) = response.text().await {
+                if let Ok(release) = serde_json::from_str::<GitHubRelease>(&body_text) {
+                    let latest_clean = release.tag_name.trim_start_matches('v').to_string();
+                    let update_available = is_newer_version(&current_version, &latest_clean);
 
-    if !response.status().is_success() {
-        // If repository has no releases yet or is rate-limited, return current version as latest
-        return Ok(UpdateInfo {
-            current_version: current_version.clone(),
-            latest_version: current_version,
-            release_name: "Current Release".to_string(),
-            release_url: format!("https://github.com/{}", GITHUB_REPO),
-            release_notes: "No newer releases found.".to_string(),
-            update_available: false,
-        });
+                    return Ok(UpdateInfo {
+                        current_version,
+                        latest_version: latest_clean,
+                        release_name: release
+                            .name
+                            .unwrap_or_else(|| format!("Release {}", release.tag_name)),
+                        release_url: release.html_url,
+                        release_notes: release.body.unwrap_or_default(),
+                        update_available,
+                    });
+                }
+            }
+        } else if response.status() == reqwest::StatusCode::NOT_FOUND {
+            // Fallback: check git tags if no formal GitHub Release exists yet
+            let tag_request = client
+                .get(TAGS_API_URL)
+                .header("User-Agent", &user_agent)
+                .header("Accept", "application/vnd.github.v3+json")
+                .timeout(Duration::from_secs(5));
+
+            if let Ok(tag_resp) = tag_request.send().await {
+                if tag_resp.status().is_success() {
+                    if let Ok(tag_body) = tag_resp.text().await {
+                        if let Ok(tags) = serde_json::from_str::<Vec<GitHubTag>>(&tag_body) {
+                            if let Some(first_tag) = tags.first() {
+                                let latest_clean =
+                                    first_tag.name.trim_start_matches('v').to_string();
+                                let update_available =
+                                    is_newer_version(&current_version, &latest_clean);
+
+                                return Ok(UpdateInfo {
+                                    current_version,
+                                    latest_version: latest_clean,
+                                    release_name: format!("Tag {}", first_tag.name),
+                                    release_url: format!(
+                                        "https://github.com/{}/releases/tag/{}",
+                                        GITHUB_REPO, first_tag.name
+                                    ),
+                                    release_notes: "Git tag release on GitHub".to_string(),
+                                    update_available,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    let body_text = response
-        .text()
-        .await
-        .context("Failed to read GitHub Releases response body")?;
-
-    let release: GitHubRelease = serde_json::from_str(&body_text)
-        .context("Failed to parse GitHub Releases API JSON response")?;
-
-    let latest_clean = release.tag_name.trim_start_matches('v').to_string();
-    let update_available = is_newer_version(&current_version, &latest_clean);
-
+    // Default fallback: return current version
     Ok(UpdateInfo {
-        current_version,
-        latest_version: latest_clean,
-        release_name: release
-            .name
-            .unwrap_or_else(|| format!("Release {}", release.tag_name)),
-        release_url: release.html_url,
-        release_notes: release.body.unwrap_or_default(),
-        update_available,
+        current_version: current_version.clone(),
+        latest_version: current_version,
+        release_name: "Current Version".to_string(),
+        release_url: format!("https://github.com/{}", GITHUB_REPO),
+        release_notes: "No newer releases found.".to_string(),
+        update_available: false,
     })
 }
 

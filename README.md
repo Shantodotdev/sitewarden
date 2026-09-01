@@ -4,6 +4,7 @@
 > Continuously monitors web apps, validates DOM assertions, captures failure screenshots, and consumes **<30 MB RAM**.
 
 [![CI & Container Build](https://github.com/Shantodotdev/sitewarden/actions/workflows/ci.yml/badge.svg)](https://github.com/Shantodotdev/sitewarden/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/Shantodotdev/sitewarden?logo=github&color=orange)](https://github.com/Shantodotdev/sitewarden/releases)
 [![License](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#-license)
 [![Docker Image](https://img.shields.io/badge/Docker-ghcr.io%2Fshantodotdev%2Fsitewarden-green.svg)](https://github.com/Shantodotdev/sitewarden/pkgs/container/sitewarden)
 
