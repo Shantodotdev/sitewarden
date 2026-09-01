@@ -574,7 +574,7 @@ pub fn format_history_table(records: &[crate::state::RunHistoryRecord]) -> Strin
     ));
 
     if records.is_empty() {
-        let empty_msg = "No test cycle history found in state.json";
+        let empty_msg = "No test cycle history recorded yet";
         let pad = " ".repeat(86usize.saturating_sub(empty_msg.width()));
         table.push_str(&format!(
             "{}│{} {}{}{} │{}\n",

@@ -17,7 +17,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Default state filename stored adjacent to `config.yaml`.
-pub const DEFAULT_STATE_FILE: &str = ".sitewarden_state.json";
+pub const DEFAULT_STATE_FILE: &str = "sitewarden.json";
 
 /// Maximum number of historical test cycle snapshots preserved in disk storage.
 pub const MAX_HISTORY_RECORDS: usize = 50;
@@ -48,6 +48,8 @@ pub struct RunHistoryRecord {
 pub struct AppState {
     /// RFC 3339 timestamp marking when the background scheduler daemon process started.
     pub daemon_started_at: Option<String>,
+    /// Last used or active configuration file path remembered for subsequent CLI invocations.
+    pub last_config_path: Option<String>,
     /// Lifetime total number of test execution cycles completed.
     pub total_cycles: u64,
     /// Lifetime total number of test cycles where all suites passed.
@@ -126,13 +128,23 @@ impl AppState {
             self.daemon_started_at = Some(Utc::now().to_rfc3339());
         }
     }
+
+    /// Updates and remembers the active configuration file path.
+    pub fn set_last_config_path(&mut self, path: &Path) {
+        let path_str = if let Ok(canonical) = path.canonicalize() {
+            canonical.to_string_lossy().to_string()
+        } else {
+            path.to_string_lossy().to_string()
+        };
+        self.last_config_path = Some(path_str);
+    }
 }
 
 /// Resolves standard state file path adjacent to the configuration file.
 ///
 /// If `config_path` resides in `/opt/sitewarden/config.yaml`, the state file will be located
-/// at `/opt/sitewarden/.sitewarden_state.json`. If no parent directory can be resolved,
-/// falls back to `.sitewarden_state.json` in the current working directory.
+/// at `/opt/sitewarden/sitewarden.json`. If no parent directory can be resolved,
+/// falls back to `sitewarden.json` in the current working directory.
 pub fn resolve_state_path(config_path: &Path) -> PathBuf {
     if let Some(parent) = config_path.parent() {
         if parent.exists() && parent.is_dir() {
@@ -199,5 +211,25 @@ mod tests {
 
         assert_eq!(state.total_cycles, 60);
         assert_eq!(state.history.len(), MAX_HISTORY_RECORDS);
+    }
+
+    #[test]
+    fn test_remembered_config_path() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path();
+
+        let mut state = AppState::default();
+        state.set_last_config_path(Path::new("config.example.yaml"));
+        assert!(state.last_config_path.is_some());
+        assert!(state
+            .last_config_path
+            .as_ref()
+            .unwrap()
+            .contains("config.example.yaml"));
+
+        state.save(path).unwrap();
+
+        let loaded = AppState::load(path);
+        assert_eq!(loaded.last_config_path, state.last_config_path);
     }
 }

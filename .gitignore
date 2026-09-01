@@ -3,6 +3,8 @@
 perf.data
 perf.data.old
 *.log
+sitewarden.json
 .sitewarden_state.json
 state.json
 *.tmp
+

@@ -35,16 +35,16 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
     about = "Autonomous, ultra-lightweight browser smoke-testing sentinel in Rust"
 )]
 struct Cli {
-    /// Path to YAML configuration file.
-    #[arg(short, long, default_value = "config.yaml")]
-    config: PathBuf,
+    /// Path to YAML configuration file (auto-discovered if omitted).
+    #[arg(short, long, global = true)]
+    config: Option<PathBuf>,
 
     /// Execute all test suites once immediately and exit (backwards-compatible alias for 'test').
-    #[arg(long)]
+    #[arg(long, global = true)]
     run_once: bool,
 
     /// Enable verbose debug logging.
-    #[arg(short, long)]
+    #[arg(short, long, global = true)]
     verbose: bool,
 
     #[command(subcommand)]
@@ -111,7 +111,7 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config_path = resolve_config_path(&cli.config);
+    let config_path = resolve_config_path(cli.config.as_deref());
 
     // Route Subcommands
     match cli.command {
@@ -132,22 +132,89 @@ async fn main() -> Result<()> {
     }
 }
 
-/// Resolves configuration file path with standard fallbacks.
-fn resolve_config_path(specified: &Path) -> PathBuf {
-    if specified.exists() {
-        specified.to_path_buf()
-    } else if Path::new("/app/config/config.yaml").exists() {
-        PathBuf::from("/app/config/config.yaml")
-    } else if Path::new("/app/config.yaml").exists() {
-        PathBuf::from("/app/config.yaml")
-    } else {
-        specified.to_path_buf()
+/// Resolves configuration file path with intelligent multi-tiered auto-discovery.
+///
+/// # Search Priority
+/// 1. Explicitly provided CLI path (`--config <PATH>` or `-c <PATH>`) -> saved to state memory.
+/// 2. `SITEWARDEN_CONFIG` environment variable.
+/// 3. Remembered active config path stored in `sitewarden.json`.
+/// 4. Current directory standard names: `config.yaml`, `config.yml`, `.sitewarden.yaml`, `sitewarden.yaml`.
+/// 5. Subdirectory standard names: `./config/config.yaml`, `./config/config.yml`.
+/// 6. Docker container volume paths: `/app/config/config.yaml`, `/app/config.yaml`.
+/// 7. System & VPS paths: `/opt/sitewarden/config.yaml`, `/etc/sitewarden/config.yaml`.
+/// 8. Development example templates: `config.example.yaml`, `config.example.yml`.
+fn resolve_config_path(specified: Option<&Path>) -> PathBuf {
+    let default_state_path = PathBuf::from(sitewarden::state::DEFAULT_STATE_FILE);
+
+    // 1. Explicitly specified path via CLI
+    if let Some(path) = specified {
+        let p = path.to_path_buf();
+        if p.exists() {
+            let mut state = AppState::load(&default_state_path);
+            state.set_last_config_path(&p);
+            let _ = state.save(&default_state_path);
+        }
+        return p;
     }
+
+    // 2. Environment variable
+    if let Ok(env_path) = std::env::var("SITEWARDEN_CONFIG") {
+        let p = PathBuf::from(env_path);
+        if p.exists() {
+            let mut state = AppState::load(&default_state_path);
+            state.set_last_config_path(&p);
+            let _ = state.save(&default_state_path);
+            return p;
+        }
+    }
+
+    // 3. Persistent state memory from previous executions
+    let state = AppState::load(&default_state_path);
+    if let Some(ref remembered) = state.last_config_path {
+        let p = PathBuf::from(remembered);
+        if p.exists() {
+            return p;
+        }
+    }
+
+    // 4. Standard search paths
+    let candidates = [
+        "config.yaml",
+        "config.yml",
+        ".sitewarden.yaml",
+        ".sitewarden.yml",
+        "sitewarden.yaml",
+        "sitewarden.yml",
+        "config/config.yaml",
+        "config/config.yml",
+        "/app/config/config.yaml",
+        "/app/config/config.yml",
+        "/app/config.yaml",
+        "/app/config.yml",
+        "/opt/sitewarden/config.yaml",
+        "/opt/sitewarden/config.yml",
+        "/etc/sitewarden/config.yaml",
+        "/etc/sitewarden/config.yml",
+        "config.example.yaml",
+        "config.example.yml",
+    ];
+
+    for candidate in candidates {
+        let p = PathBuf::from(candidate);
+        if p.exists() {
+            let mut state = AppState::load(&default_state_path);
+            state.set_last_config_path(&p);
+            let _ = state.save(&default_state_path);
+            return p;
+        }
+    }
+
+    PathBuf::from("config.yaml")
 }
 
 /// Subcommand: `sitewarden status`
 ///
-/// Loads persistent metrics from `.sitewarden_state.json`, reads the active `config.yaml`,
+/// Loads persistent metrics from `sitewarden.json`, reads the active `config.yaml`,
 /// queries screenshot storage usage, and initiates a non-blocking background check for updates.
 /// Renders a formatted ASCII dashboard containing uptime, success rates, and cycle health.
 async fn handle_status(config_path: &Path) -> Result<()> {
