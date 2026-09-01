@@ -20,21 +20,49 @@ pub struct BrowserManager {
 }
 
 impl BrowserManager {
+    /// Detects available Chromium or Chrome Headless Shell binary path.
+    pub fn detect_chrome_executable() -> Option<PathBuf> {
+        if let Ok(path) = std::env::var("CHROME_BIN") {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+        if let Ok(path) = std::env::var("CHROMIUM_PATH") {
+            let p = PathBuf::from(path);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        let candidates = [
+            "/usr/bin/chrome-headless-shell",
+            "/usr/bin/chromium-headless-shell",
+            "/usr/bin/chromium-browser",
+            "/usr/bin/chromium",
+            "/usr/bin/google-chrome-stable",
+            "/usr/bin/google-chrome",
+            "/snap/bin/chromium",
+        ];
+
+        for candidate in candidates {
+            let p = PathBuf::from(candidate);
+            if p.exists() {
+                return Some(p);
+            }
+        }
+
+        None
+    }
+
     /// Launches a new headless Chromium instance with the hardened flags specified in SRS FR-3.1.
     pub async fn launch() -> Result<Self> {
         info!("Launching headless Chromium instance...");
 
         let mut config_builder = BrowserConfig::builder();
 
-        // Auto-detect browser binary: prioritize chrome-headless-shell, then CHROME_BIN / system chromium
-        if let Ok(path) = std::env::var("CHROME_BIN") {
-            config_builder = config_builder.chrome_executable(path);
-        } else if let Ok(path) = std::env::var("CHROMIUM_PATH") {
-            config_builder = config_builder.chrome_executable(path);
-        } else if std::path::Path::new("/usr/bin/chrome-headless-shell").exists() {
-            config_builder = config_builder.chrome_executable("/usr/bin/chrome-headless-shell");
-        } else if std::path::Path::new("/usr/bin/chromium-headless-shell").exists() {
-            config_builder = config_builder.chrome_executable("/usr/bin/chromium-headless-shell");
+        if let Some(exe_path) = Self::detect_chrome_executable() {
+            config_builder = config_builder.chrome_executable(exe_path);
         }
 
         // Apply mandatory flags per SRS FR-3.1 & cloud VPS best practices:

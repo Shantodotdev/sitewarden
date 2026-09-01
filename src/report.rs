@@ -1,4 +1,12 @@
-//! Visual reporting, ASCII scorecards, and diagnostic formatting for SiteWarden test cycles.
+//! Visual execution tree reporting, ASCII scorecards, and diagnostic formatting for SiteWarden.
+//!
+//! # Visual Reporting Engine Design
+//! SiteWarden uses a custom-crafted terminal reporting engine that balances human aesthetics with
+//! automated log-parser compatibility:
+//! - **Unicode-Width Padding:** Accurately computes true terminal column widths for 2-column emojis (`🌐`, `⏳`, `🔍`, `👁️`, `🖱️`, `✍️`, `✅`, `❌`), ensuring arrows and badges align vertically.
+//! - **Semantic Color Palette:** Actions are color-coded (Cyan for navigation, Yellow for waiting, Magenta for assertions, Blue for visibility).
+//! - **Hierarchical Execution Tree:** Tests and steps are nested using box-drawing characters (`├──`, `└──`) for clean visual scanning.
+//! - **Symmetric Scorecard Tables:** ASCII summary tables close with exact column widths across dynamic test suite names and durations.
 
 use crate::config::TestStep;
 use std::time::Duration;
@@ -315,10 +323,11 @@ pub fn format_summary_table(
         )
     };
 
-    let padding = " ".repeat(88usize.saturating_sub(raw_summary_line.width()));
+    let pad_len = 88usize.saturating_sub(raw_summary_line.width());
+    let padding = " ".repeat(pad_len);
 
     table.push_str(&format!(
-        "{}│{} {} • Total Cycle Time: {}{}{}│{}\n",
+        "{}│{} {} • Total Cycle Time: {}{}{} │{}\n",
         GRAY, RESET, summary_badge, total_time_str, padding, GRAY, RESET
     ));
     table.push_str(&format!(
@@ -374,6 +383,301 @@ pub fn truncate_to_width(s: &str, max_width: usize) -> String {
 
     result.push_str("...");
     result
+}
+
+/// Formats the overall status dashboard for `sitewarden status`.
+pub fn format_status_dashboard(
+    state: &crate::state::AppState,
+    config: &crate::config::AppConfig,
+    update_info: Option<&crate::updater::UpdateInfo>,
+    screenshot_count: usize,
+    screenshot_bytes: u64,
+) -> String {
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&format!(
+        "{}┌────────────────────────── SiteWarden Daemon Status ──────────────────────────┐{}\n",
+        GRAY, RESET
+    ));
+
+    // Helper to format consistent 80-column dashboard rows
+    let format_row = |label: &str, display_val: &str, raw_val: &str| -> String {
+        let label_padded = pad_to_width(label, 18);
+        let val_width = raw_val.width();
+        let pad_len = 58usize.saturating_sub(val_width);
+        let padding = " ".repeat(pad_len);
+        format!(
+            "{}│{} {}{}{}{} {}│{}\n",
+            GRAY, RESET, label_padded, display_val, RESET, padding, GRAY, RESET
+        )
+    };
+
+    // 1. Status
+    let status_str = format!("{}🟢 Active (Scheduler Daemon){}", BOLD_GREEN, RESET);
+    let raw_status = "🟢 Active (Scheduler Daemon)";
+    out.push_str(&format_row("Status:", &status_str, raw_status));
+
+    // 2. Version
+    let (version_str, raw_version) = if let Some(up) = update_info {
+        if up.update_available {
+            (
+                format!(
+                    "v{} ({}✨ v{} Available! Run: sitewarden update{})",
+                    up.current_version, BOLD_CYAN, up.latest_version, RESET
+                ),
+                format!(
+                    "v{} (✨ v{} Available! Run: sitewarden update)",
+                    up.current_version, up.latest_version
+                ),
+            )
+        } else {
+            (
+                format!("v{} ({}Latest{})", up.current_version, GREEN, RESET),
+                format!("v{} (Latest)", up.current_version),
+            )
+        }
+    } else {
+        (
+            format!("v{}", env!("CARGO_PKG_VERSION")),
+            format!("v{}", env!("CARGO_PKG_VERSION")),
+        )
+    };
+    out.push_str(&format_row("Version:", &version_str, &raw_version));
+
+    // 3. Uptime
+    let uptime_str = if let Some(ref started_at) = state.daemon_started_at {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
+            let dur = chrono::Utc::now().signed_duration_since(dt);
+            let days = dur.num_days();
+            let hours = dur.num_hours() % 24;
+            let mins = dur.num_minutes() % 60;
+            if days > 0 {
+                format!("{} days, {} hours, {} mins", days, hours, mins)
+            } else if hours > 0 {
+                format!("{} hours, {} mins", hours, mins)
+            } else {
+                format!("{} mins", mins)
+            }
+        } else {
+            "Active".to_string()
+        }
+    } else {
+        "Standalone CLI mode (Daemon state idle)".to_string()
+    };
+    out.push_str(&format_row("Uptime:", &uptime_str, &uptime_str));
+
+    // 4. Schedule
+    let sched_str = format!("Cron: '{}'", config.schedule);
+    out.push_str(&format_row("Schedule:", &sched_str, &sched_str));
+
+    out.push_str(&format!(
+        "{}├──────────────────────────────────────────────────────────────────────────────┤{}\n",
+        GRAY, RESET
+    ));
+
+    // 5. Statistics
+    let success_rate = if state.total_cycles > 0 {
+        format!(
+            "{:.1}%",
+            (state.total_passed_cycles as f64 / state.total_cycles as f64) * 100.0
+        )
+    } else {
+        "100.0%".to_string()
+    };
+
+    let stats_str = format!(
+        "{} runs ({} Passed, {} Failed • {} Success Rate)",
+        state.total_cycles, state.total_passed_cycles, state.total_failed_cycles, success_rate
+    );
+    out.push_str(&format_row("Total Cycles:", &stats_str, &stats_str));
+
+    let last_run_str = if let Some(ref last) = state.last_cycle {
+        let res = if last.all_passed {
+            "✅ Passed"
+        } else {
+            "❌ Failed"
+        };
+        format!("{} ({}, {}ms)", last.timestamp, res, last.duration_ms)
+    } else {
+        "No test cycles executed yet".to_string()
+    };
+    out.push_str(&format_row("Last Run:", &last_run_str, &last_run_str));
+
+    out.push_str(&format!(
+        "{}├──────────────────────────────────────────────────────────────────────────────┤{}\n",
+        GRAY, RESET
+    ));
+
+    // 6. Suites & Storage
+    let suites_str = format!(
+        "{} configured ({} tests, {} steps)",
+        config.suites.len(),
+        config.total_tests(),
+        config.total_steps()
+    );
+    out.push_str(&format_row("Monitored Suites:", &suites_str, &suites_str));
+
+    let storage_str = format!(
+        "{} artifacts ({}) in {}",
+        screenshot_count,
+        crate::pruner::format_bytes(screenshot_bytes),
+        config.screenshot_dir
+    );
+    out.push_str(&format_row("Screenshots:", &storage_str, &storage_str));
+
+    out.push_str(&format!(
+        "{}└──────────────────────────────────────────────────────────────────────────────┘{}\n",
+        GRAY, RESET
+    ));
+
+    out
+}
+
+/// Formats the history timeline table for `sitewarden history`.
+pub fn format_history_table(records: &[crate::state::RunHistoryRecord]) -> String {
+    let mut table = String::new();
+    table.push('\n');
+    table.push_str(&format!(
+        "{}┌──────────────────────┬────────────────────────┬────────────┬──────────────┬────────────┐{}\n",
+        GRAY, RESET
+    ));
+
+    let h1 = pad_to_width("Timestamp (UTC)", 20);
+    let h2 = pad_to_width("Suites (Pass/Fail)", 22);
+    let h3 = pad_to_width("Result", 10);
+    let h4 = pad_to_width("Duration", 12);
+    let h5 = pad_to_width("Trigger", 10);
+
+    table.push_str(&format!(
+        "{}│{} {} {}│{} {} {}│{} {} {}│{} {} {}│{} {} {}│{}\n",
+        GRAY,
+        BOLD_WHITE,
+        h1,
+        GRAY,
+        BOLD_WHITE,
+        h2,
+        GRAY,
+        BOLD_WHITE,
+        h3,
+        GRAY,
+        BOLD_WHITE,
+        h4,
+        GRAY,
+        BOLD_WHITE,
+        h5,
+        GRAY,
+        RESET
+    ));
+    table.push_str(&format!(
+        "{}├──────────────────────┼────────────────────────┼────────────┼──────────────┼────────────┤{}\n",
+        GRAY, RESET
+    ));
+
+    if records.is_empty() {
+        let empty_msg = "No test cycle history found in state.json";
+        let pad = " ".repeat(86usize.saturating_sub(empty_msg.width()));
+        table.push_str(&format!(
+            "{}│{} {}{}{} │{}\n",
+            GRAY, RESET, empty_msg, pad, GRAY, RESET
+        ));
+    } else {
+        for r in records {
+            let result_colored = if r.all_passed {
+                format!("{}{}{}", BOLD_GREEN, pad_to_width("✅ PASS", 10), RESET)
+            } else {
+                format!("{}{}{}", BOLD_RED, pad_to_width("❌ FAIL", 10), RESET)
+            };
+
+            let suites_str = format!(
+                "{}/{} ({} steps)",
+                r.passed_suites, r.total_suites, r.total_steps
+            );
+            let dur_str = format_duration(Duration::from_millis(r.duration_ms));
+
+            let col1 = pad_to_width(&truncate_to_width(&r.timestamp, 20), 20);
+            let col2 = pad_to_width(&truncate_to_width(&suites_str, 22), 22);
+            let col4 = pad_to_width(&truncate_to_width(&dur_str, 12), 12);
+            let col5 = pad_to_width(&truncate_to_width(&r.trigger, 10), 10);
+
+            table.push_str(&format!(
+                "{}│{} {} {}│{} {} {}│{} {} {}│{} {} {}│{} {} {}│{}\n",
+                GRAY,
+                RESET,
+                col1,
+                GRAY,
+                RESET,
+                col2,
+                GRAY,
+                RESET,
+                result_colored,
+                GRAY,
+                RESET,
+                col4,
+                GRAY,
+                RESET,
+                col5,
+                GRAY,
+                RESET
+            ));
+        }
+    }
+
+    table.push_str(&format!(
+        "{}└──────────────────────┴────────────────────────┴────────────┴──────────────┴────────────┘{}\n",
+        GRAY, RESET
+    ));
+
+    table
+}
+
+/// Formats the doctor diagnostics checklist.
+pub fn format_doctor_report(checks: &[crate::doctor::DoctorCheck]) -> String {
+    let mut out = String::new();
+    out.push('\n');
+    out.push_str(&format!(
+        "{}🩺 SiteWarden Environment Diagnostics & Pre-Flight Checks{}\n",
+        BOLD_WHITE, RESET
+    ));
+    out.push_str(&format!("{}{}{}\n\n", GRAY, "─".repeat(70), RESET));
+
+    let mut all_ok = true;
+    for check in checks {
+        let badge = if check.passed {
+            format!("{}[PASS]{}", BOLD_GREEN, RESET)
+        } else {
+            all_ok = false;
+            format!("{}[FAIL]{}", BOLD_RED, RESET)
+        };
+
+        out.push_str(&format!(
+            "  {} {:<10} {} {}{}{}\n",
+            badge,
+            format!("[{}]", check.category),
+            "→",
+            BOLD_WHITE,
+            check.name,
+            RESET
+        ));
+        out.push_str(&format!(
+            "             {}{}{}\n",
+            GRAY, check.details, RESET
+        ));
+    }
+
+    out.push('\n');
+    if all_ok {
+        out.push_str(&format!(
+            "{}🎉 All diagnostic checks passed! System is 100% healthy and operational.{}\n",
+            BOLD_GREEN, RESET
+        ));
+    } else {
+        out.push_str(&format!(
+            "{}⚠️ One or more diagnostic checks encountered issues. Review details above.{}\n",
+            BOLD_RED, RESET
+        ));
+    }
+
+    out
 }
 
 #[cfg(test)]
@@ -466,8 +770,69 @@ mod tests {
 
         let table = format_summary_table(&summaries, Duration::from_millis(746));
         for line in table.lines() {
-            if line.contains('│') {
-                assert!(line.contains('│'), "Line contains border: {}", line);
+            if !line.trim().is_empty() {
+                let clean = strip_ansi(line);
+                assert_eq!(
+                    clean.width(),
+                    92,
+                    "Summary table line width mismatch: '{}' (width {})",
+                    clean,
+                    clean.width()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_format_status_dashboard_alignment() {
+        let state = crate::state::AppState::default();
+        let config = crate::config::AppConfig {
+            schedule: "0 0 6 * * *".to_string(),
+            browser_concurrency: 2,
+            timeout_seconds: 30,
+            screenshot_dir: "/app/screenshots".to_string(),
+            suites: vec![],
+        };
+
+        let dashboard = format_status_dashboard(&state, &config, None, 0, 0);
+        for line in dashboard.lines() {
+            if !line.trim().is_empty() {
+                let clean = strip_ansi(line);
+                assert_eq!(
+                    clean.width(),
+                    80,
+                    "Dashboard line width mismatch: '{}' (width {})",
+                    clean,
+                    clean.width()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_format_history_table_alignment() {
+        let records = vec![crate::state::RunHistoryRecord {
+            timestamp: "2026-09-01 06:04:18".to_string(),
+            total_suites: 2,
+            passed_suites: 2,
+            failed_suites: 0,
+            total_steps: 8,
+            duration_ms: 1370,
+            trigger: "Cycle".to_string(),
+            all_passed: true,
+        }];
+
+        let table = format_history_table(&records);
+        for line in table.lines() {
+            if !line.trim().is_empty() {
+                let clean = strip_ansi(line);
+                assert_eq!(
+                    clean.width(),
+                    90,
+                    "History table line width mismatch: '{}' (width {})",
+                    clean,
+                    clean.width()
+                );
             }
         }
     }

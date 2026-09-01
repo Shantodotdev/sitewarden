@@ -89,7 +89,90 @@ pub async fn run_all_suites(
     let summary_table = format_summary_table(&summaries, total_cycle_duration);
     println!("{}", summary_table);
 
+    // Record execution cycle into persistent state.json
+    let state_path = crate::state::resolve_state_path(&std::path::PathBuf::from("config.yaml"));
+    let mut state = crate::state::AppState::load(&state_path);
+    let record = crate::state::RunHistoryRecord {
+        timestamp: now_str,
+        total_suites: config.suites.len(),
+        passed_suites: summaries.iter().filter(|s| s.passed).count(),
+        failed_suites: summaries.iter().filter(|s| !s.passed).count(),
+        total_steps: config.total_steps(),
+        duration_ms: total_cycle_duration.as_millis() as u64,
+        trigger: "Cycle".to_string(),
+        all_passed: all_suites_passed,
+    };
+    state.record_cycle(record);
+    let _ = state.save(&state_path);
+
     all_suites_passed
+}
+
+/// Executes a single specific test suite by name on demand.
+pub async fn run_named_suite(
+    suite_name: &str,
+    shared_config: &Arc<ArcSwap<AppConfig>>,
+    alert_dispatcher: &AlertDispatcher,
+) -> bool {
+    let config = shared_config.load_full();
+    let matching_suite = config.suites.iter().find(|s| {
+        s.name.eq_ignore_ascii_case(suite_name)
+            || s.name.to_lowercase().contains(&suite_name.to_lowercase())
+    });
+
+    let suite = match matching_suite {
+        Some(s) => s,
+        None => {
+            error!(
+                "No test suite found matching '{}'. Available suites: {}",
+                suite_name,
+                config
+                    .suites
+                    .iter()
+                    .map(|s| format!("'{}'", s.name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            return false;
+        }
+    };
+
+    let start_instant = Instant::now();
+    let is_static = suite.is_all_static();
+    let http_client = Arc::new(Client::builder().build().unwrap_or_default());
+
+    let browser = if !is_static {
+        info!("Interactive tests detected. Launching on-demand Chromium engine...");
+        match BrowserManager::launch().await {
+            Ok(bm) => Some(Arc::new(bm)),
+            Err(err) => {
+                error!(error = %err, "Failed to launch Chromium engine for test suite");
+                return false;
+            }
+        }
+    } else {
+        info!("Running suite in pure-Rust static engine (zero browser overhead).");
+        None
+    };
+
+    let (passed, summary) = run_suite(
+        suite,
+        &config,
+        browser.as_ref(),
+        &http_client,
+        alert_dispatcher,
+    )
+    .await;
+
+    if let Some(b) = browser {
+        b.shutdown().await;
+        info!("Released on-demand browser resources back to system.");
+    }
+
+    let summary_table = format_summary_table(&[summary], start_instant.elapsed());
+    println!("{}", summary_table);
+
+    passed
 }
 
 /// Executes a single test suite with concurrency bounded by `browser_concurrency`.
