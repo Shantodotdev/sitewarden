@@ -9,14 +9,13 @@ use anyhow::{bail, Context, Result};
 use reqwest::Client;
 use scraper::{Html, Selector};
 use std::time::Instant;
-use tracing::{debug, info, instrument};
+use tracing::debug;
 
 /// Default user agent header for pure-Rust static engine requests.
 pub const STATIC_ENGINE_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 SiteWarden/0.1.0";
 
 /// Executes static test steps against target URL using pure-Rust HTTP client.
-#[instrument(skip(client, steps), fields(test = %test_name, base_url = %base_url))]
 pub async fn execute_static_test_case(
     client: &Client,
     base_url: &str,
@@ -24,41 +23,67 @@ pub async fn execute_static_test_case(
     steps: &[TestStep],
 ) -> TestCaseResult {
     let start_time = Instant::now();
-    info!(test = %test_name, step_count = steps.len(), "Starting pure-Rust static test execution");
+    println!(
+        "  {}▶ Test: {}{}",
+        crate::report::BOLD_CYAN,
+        test_name,
+        crate::report::RESET
+    );
 
     let mut current_html: Option<String> = None;
 
     for (index, step) in steps.iter().enumerate() {
-        debug!(step_index = index, step = ?step, "Executing static test step");
+        let step_start = Instant::now();
+        let action = crate::report::step_action_name(step);
+        let target = crate::report::step_target_desc(step);
 
-        if let Err(err) = execute_static_step(client, base_url, step, &mut current_html).await {
-            let duration = start_time.elapsed();
-            let action_type = match step {
-                TestStep::Navigate { .. } => "navigate",
-                TestStep::AssertText { .. } => "assert_text",
-                TestStep::AssertVisible { .. } => "assert_visible",
-                TestStep::WaitForSelector { .. } => "wait_for_selector",
-                TestStep::Click { .. } => "click",
-                TestStep::TypeText { .. } => "type_text",
+        match execute_static_step(client, base_url, step, &mut current_html).await {
+            Ok(_) => {
+                let step_dur = step_start.elapsed();
+                println!(
+                    "{}",
+                    crate::report::format_step_log(
+                        index,
+                        steps.len(),
+                        action,
+                        &target,
+                        step_dur,
+                        true
+                    )
+                );
             }
-            .to_string();
+            Err(err) => {
+                let step_dur = step_start.elapsed();
+                eprintln!(
+                    "{}",
+                    crate::report::format_step_log(
+                        index,
+                        steps.len(),
+                        action,
+                        &target,
+                        step_dur,
+                        false
+                    )
+                );
+                let duration = start_time.elapsed();
 
-            return TestCaseResult {
-                test_name: test_name.to_string(),
-                success: false,
-                duration,
-                failure: Some(StepFailure {
-                    step_index: index,
-                    action_type,
-                    error_message: format!("{:#}", err),
-                    screenshot_path: None,
-                }),
-            };
+                return TestCaseResult {
+                    test_name: test_name.to_string(),
+                    success: false,
+                    duration,
+                    failure: Some(StepFailure {
+                        step_index: index,
+                        action_type: action.to_string(),
+                        error_message: format!("{:#}", err),
+                        screenshot_path: None,
+                    }),
+                };
+            }
         }
     }
 
     let duration = start_time.elapsed();
-    info!(test = %test_name, duration_ms = duration.as_millis(), "Static test case completed successfully");
+    println!("{}", crate::report::format_test_passed(duration));
 
     TestCaseResult {
         test_name: test_name.to_string(),

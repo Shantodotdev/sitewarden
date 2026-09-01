@@ -6,6 +6,7 @@ pub mod alert;
 pub mod browser;
 pub mod config;
 pub mod engine;
+pub mod report;
 pub mod scheduler;
 pub mod static_engine;
 pub mod watcher;

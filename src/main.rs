@@ -53,10 +53,16 @@ async fn main() -> Result<()> {
     };
 
     // Register tracing subscriber with fallback to RUST_LOG environment variable,
-    // explicitly routing logs to stdout for standard Docker/systemd daemon aggregation.
+    // formatted compactly with clean target suppression for maximum terminal & Docker readability.
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter_level)))
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stdout))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(false)
+                .with_ansi(true)
+                .compact()
+                .with_writer(std::io::stdout),
+        )
         .init();
 
     info!(

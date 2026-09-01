@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use chromiumoxide::page::Page;
 use serde_json::Value;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, instrument};
+use tracing::debug;
 use url::Url;
 
 /// Result of executing a single test case.
@@ -44,7 +44,6 @@ pub struct StepFailure {
 }
 
 /// Executes all steps of a test case sequentially in the provided browser page.
-#[instrument(skip(page, steps), fields(test = %test_name, base_url = %base_url))]
 pub async fn execute_test_case(
     page: &Page,
     base_url: &str,
@@ -52,39 +51,65 @@ pub async fn execute_test_case(
     steps: &[TestStep],
 ) -> TestCaseResult {
     let start_time = Instant::now();
-    info!(test = %test_name, step_count = steps.len(), "Starting test case execution");
+    println!(
+        "  {}▶ Test: {}{}",
+        crate::report::BOLD_CYAN,
+        test_name,
+        crate::report::RESET
+    );
 
     for (index, step) in steps.iter().enumerate() {
-        debug!(step_index = index, step = ?step, "Executing test step");
+        let step_start = Instant::now();
+        let action = crate::report::step_action_name(step);
+        let target = crate::report::step_target_desc(step);
 
-        if let Err(err) = execute_step(page, base_url, step).await {
-            let duration = start_time.elapsed();
-            let action_type = match step {
-                TestStep::Navigate { .. } => "navigate",
-                TestStep::WaitForSelector { .. } => "wait_for_selector",
-                TestStep::AssertText { .. } => "assert_text",
-                TestStep::AssertVisible { .. } => "assert_visible",
-                TestStep::Click { .. } => "click",
-                TestStep::TypeText { .. } => "type_text",
+        match execute_step(page, base_url, step).await {
+            Ok(_) => {
+                let step_dur = step_start.elapsed();
+                println!(
+                    "{}",
+                    crate::report::format_step_log(
+                        index,
+                        steps.len(),
+                        action,
+                        &target,
+                        step_dur,
+                        true
+                    )
+                );
             }
-            .to_string();
+            Err(err) => {
+                let step_dur = step_start.elapsed();
+                eprintln!(
+                    "{}",
+                    crate::report::format_step_log(
+                        index,
+                        steps.len(),
+                        action,
+                        &target,
+                        step_dur,
+                        false
+                    )
+                );
+                let duration = start_time.elapsed();
 
-            return TestCaseResult {
-                test_name: test_name.to_string(),
-                success: false,
-                duration,
-                failure: Some(StepFailure {
-                    step_index: index,
-                    action_type,
-                    error_message: format!("{:#}", err),
-                    screenshot_path: None,
-                }),
-            };
+                return TestCaseResult {
+                    test_name: test_name.to_string(),
+                    success: false,
+                    duration,
+                    failure: Some(StepFailure {
+                        step_index: index,
+                        action_type: action.to_string(),
+                        error_message: format!("{:#}", err),
+                        screenshot_path: None,
+                    }),
+                };
+            }
         }
     }
 
     let duration = start_time.elapsed();
-    info!(test = %test_name, duration_ms = duration.as_millis(), "Test case completed successfully");
+    println!("{}", crate::report::format_test_passed(duration));
 
     TestCaseResult {
         test_name: test_name.to_string(),

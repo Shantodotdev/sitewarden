@@ -9,6 +9,7 @@ use crate::alert::{AlertDispatcher, FailureAlert};
 use crate::browser::BrowserManager;
 use crate::config::{AppConfig, TestCase, TestSuite};
 use crate::engine::{execute_test_case, TestCaseResult};
+use crate::report::{format_failure_card, format_summary_table, SuiteExecutionSummary};
 use crate::static_engine::execute_static_test_case;
 use anyhow::{Context, Result};
 use arc_swap::ArcSwap;
@@ -17,7 +18,7 @@ use futures::stream::{self, StreamExt};
 use reqwest::Client;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio_cron_scheduler::{Job, JobScheduler};
 use tracing::{error, info, warn};
@@ -28,14 +29,15 @@ pub async fn run_all_suites(
     alert_dispatcher: &AlertDispatcher,
 ) -> bool {
     let config = shared_config.load_full();
-    let start_time = Utc::now();
+    let start_instant = Instant::now();
+    let now_str = Utc::now().format("%Y-%m-%d %H:%M:%S UTC").to_string();
     info!(
-        timestamp = %start_time.to_rfc3339(),
-        suite_count = config.suites.len(),
-        total_tests = config.total_tests(),
-        total_steps = config.total_steps(),
-        concurrency = config.browser_concurrency,
-        "Starting smoke test execution cycle"
+        "🚀 Starting Smoke Test Cycle • {} [{} Suites • {} Tests ({} Steps) • Concurrency: {}]",
+        now_str,
+        config.suites.len(),
+        config.total_tests(),
+        config.total_steps(),
+        config.browser_concurrency
     );
 
     let any_dynamic = config.suites.iter().any(|s| !s.is_all_static());
@@ -59,9 +61,10 @@ pub async fn run_all_suites(
     };
 
     let mut all_suites_passed = true;
+    let mut summaries = Vec::new();
 
     for suite in &config.suites {
-        let suite_passed = run_suite(
+        let (suite_passed, summary) = run_suite(
             suite,
             &config,
             browser.as_ref(),
@@ -69,9 +72,11 @@ pub async fn run_all_suites(
             alert_dispatcher,
         )
         .await;
+
         if !suite_passed {
             all_suites_passed = false;
         }
+        summaries.push(summary);
     }
 
     // Immediately shut down browser process if one was launched
@@ -80,10 +85,9 @@ pub async fn run_all_suites(
         info!("Released on-demand browser resources back to system.");
     }
 
-    info!(
-        all_passed = all_suites_passed,
-        "Smoke test execution cycle completed."
-    );
+    let total_cycle_duration = start_instant.elapsed();
+    let summary_table = format_summary_table(&summaries, total_cycle_duration);
+    println!("{}", summary_table);
 
     all_suites_passed
 }
@@ -95,14 +99,18 @@ async fn run_suite(
     browser: Option<&Arc<BrowserManager>>,
     http_client: &Arc<Client>,
     alert_dispatcher: &AlertDispatcher,
-) -> bool {
+) -> (bool, SuiteExecutionSummary) {
+    let suite_start = Instant::now();
+    let is_static = suite.is_all_static();
+    let engine_type = if is_static { "Static" } else { "Browser" };
+
     info!(
-        suite = %suite.name,
-        test_count = suite.tests.len(),
-        step_count = suite.total_steps(),
-        base_url = %suite.base_url,
-        is_static = suite.is_all_static(),
-        "Executing test suite"
+        "▶ Executing Suite: {} ({}) [Engine: {} • {} Tests • {} Steps]",
+        suite.name,
+        suite.base_url,
+        engine_type,
+        suite.tests.len(),
+        suite.total_steps()
     );
 
     let concurrency = config.browser_concurrency;
@@ -123,13 +131,27 @@ async fn run_suite(
             async move {
                 if test_case.is_static_executable() {
                     // Pure-Rust static execution
-                    execute_static_test_case(
+                    let res = execute_static_test_case(
                         &http_client,
                         &base_url,
                         &test_case.name,
                         &test_case.steps,
                     )
-                    .await
+                    .await;
+
+                    if let Some(ref failure) = res.failure {
+                        let card = format_failure_card(
+                            &suite_name,
+                            &test_case.name,
+                            failure.step_index,
+                            &failure.action_type,
+                            &failure.error_message,
+                            None,
+                        );
+                        eprintln!("{}", card);
+                    }
+
+                    res
                 } else if let Some(ref b) = browser {
                     // Dynamic browser execution
                     run_single_test_with_recovery(
@@ -143,7 +165,7 @@ async fn run_suite(
                     .await
                 } else {
                     // Fallback safety if no browser was provisioned
-                    TestCaseResult {
+                    let res = TestCaseResult {
                         test_name: test_case.name.clone(),
                         success: false,
                         duration: Duration::ZERO,
@@ -155,7 +177,21 @@ async fn run_suite(
                                     .to_string(),
                             screenshot_path: None,
                         }),
+                    };
+
+                    if let Some(ref failure) = res.failure {
+                        let card = format_failure_card(
+                            &suite_name,
+                            &test_case.name,
+                            failure.step_index,
+                            &failure.action_type,
+                            &failure.error_message,
+                            None,
+                        );
+                        eprintln!("{}", card);
                     }
+
+                    res
                 }
             }
         })
@@ -163,23 +199,28 @@ async fn run_suite(
         .collect()
         .await;
 
-    // Count failures
+    // Count results
+    let mut passed_count = 0;
     let mut failed_count = 0;
     let mut suite_success = true;
 
-    for result in results {
-        if !result.success {
+    for result in &results {
+        if result.success {
+            passed_count += 1;
+        } else {
             suite_success = false;
             failed_count += 1;
         }
     }
+
+    let suite_duration = suite_start.elapsed();
 
     // If any test in the suite failed, trigger alert dispatcher
     if !suite_success {
         warn!(
             suite = %suite.name,
             failures = failed_count,
-            "Test suite incurred failures."
+            "Suite incurred test failures"
         );
 
         let alert = FailureAlert {
@@ -188,11 +229,19 @@ async fn run_suite(
         };
 
         alert_dispatcher.dispatch(&alert).await;
-    } else {
-        info!(suite = %suite.name, "All tests in suite passed successfully!");
     }
 
-    suite_success
+    let summary = SuiteExecutionSummary {
+        name: suite.name.clone(),
+        engine_type,
+        passed: suite_success,
+        total_tests: suite.tests.len(),
+        passed_tests: passed_count,
+        total_steps: suite.total_steps(),
+        duration: suite_duration,
+    };
+
+    (suite_success, summary)
 }
 
 /// Executes a single dynamic test case inside a dedicated tab, with strict timeout and failure screenshot capture.
@@ -208,7 +257,7 @@ async fn run_single_test_with_recovery(
         Ok(p) => p,
         Err(err) => {
             error!(test = %test_case.name, error = %err, "Failed to allocate new browser page");
-            return TestCaseResult {
+            let res = TestCaseResult {
                 test_name: test_case.name.clone(),
                 success: false,
                 duration: Duration::ZERO,
@@ -219,6 +268,18 @@ async fn run_single_test_with_recovery(
                     screenshot_path: None,
                 }),
             };
+
+            let card = format_failure_card(
+                suite_name,
+                &test_case.name,
+                0,
+                "tab_allocation",
+                &format!("Browser tab creation failed: {}", err),
+                None,
+            );
+            eprintln!("{}", card);
+
+            return res;
         }
     };
 
@@ -279,13 +340,15 @@ async fn run_single_test_with_recovery(
         };
 
         if let Some(ref failure) = result.failure {
-            error!(
-                test = %test_case.name,
-                step = failure.step_index,
-                action = %failure.action_type,
-                error = %failure.error_message,
-                "Test step failed"
+            let card = format_failure_card(
+                suite_name,
+                &test_case.name,
+                failure.step_index,
+                &failure.action_type,
+                &failure.error_message,
+                failure.screenshot_path.as_deref(),
             );
+            eprintln!("{}", card);
         }
     }
 
