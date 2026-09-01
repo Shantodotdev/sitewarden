@@ -23,7 +23,6 @@ use sitewarden::watcher::ConfigWatcher;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -573,7 +572,7 @@ async fn run_daemon(config_path: &Path, _verbose: bool) -> Result<()> {
     // Track daemon start in state.json
     let state_path = resolve_state_path(config_path);
     let mut state = AppState::load(&state_path);
-    state.mark_started();
+    state.mark_started(std::process::id());
     let _ = state.save(&state_path);
 
     let shared_config = Arc::new(ArcSwap::from_pointee(initial_config));
@@ -598,7 +597,7 @@ async fn run_daemon(config_path: &Path, _verbose: bool) -> Result<()> {
                 std::process::exit(1);
             }
         };
-    let scheduler_handle = Arc::new(Mutex::new(scheduler));
+    let scheduler_handle = Arc::new(tokio::sync::Mutex::new(scheduler));
 
     // Listen for graceful shutdown signals (SIGINT / SIGTERM)
     let shutdown_signal = async {
@@ -634,6 +633,9 @@ async fn run_daemon(config_path: &Path, _verbose: bool) -> Result<()> {
                 if let Err(err) = sched.shutdown().await {
                     warn!(error = %err, "Error shutting down job scheduler");
                 }
+                let mut state = AppState::load(&state_path);
+                state.mark_stopped();
+                let _ = state.save(&state_path);
                 info!("SiteWarden sentinel cleanly terminated. Goodbye!");
                 break;
             }

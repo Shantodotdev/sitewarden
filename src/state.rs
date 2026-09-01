@@ -48,6 +48,8 @@ pub struct RunHistoryRecord {
 pub struct AppState {
     /// RFC 3339 timestamp marking when the background scheduler daemon process started.
     pub daemon_started_at: Option<String>,
+    /// Process ID (PID) of the active background scheduler daemon.
+    pub daemon_pid: Option<u32>,
     /// Last used or active configuration file path remembered for subsequent CLI invocations.
     pub last_config_path: Option<String>,
     /// Lifetime total number of test execution cycles completed.
@@ -122,10 +124,31 @@ impl AppState {
         }
     }
 
-    /// Records the daemon startup timestamp if it has not yet been set in this session.
-    pub fn mark_started(&mut self) {
-        if self.daemon_started_at.is_none() {
-            self.daemon_started_at = Some(Utc::now().to_rfc3339());
+    /// Records the daemon startup timestamp and PID.
+    pub fn mark_started(&mut self, pid: u32) {
+        self.daemon_pid = Some(pid);
+        self.daemon_started_at = Some(Utc::now().to_rfc3339());
+    }
+
+    /// Clears the active daemon marker upon clean process shutdown.
+    pub fn mark_stopped(&mut self) {
+        self.daemon_pid = None;
+        self.daemon_started_at = None;
+    }
+
+    /// Checks whether the background scheduler daemon process is actually alive on the system.
+    pub fn is_daemon_running(&self) -> bool {
+        if let Some(pid) = self.daemon_pid {
+            #[cfg(target_os = "linux")]
+            {
+                std::path::Path::new(&format!("/proc/{}", pid)).exists()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                self.daemon_started_at.is_some()
+            }
+        } else {
+            false
         }
     }
 
@@ -166,8 +189,9 @@ mod tests {
         let path = tmp.path();
 
         let mut state = AppState::default();
-        state.mark_started();
+        state.mark_started(std::process::id());
         assert!(state.daemon_started_at.is_some());
+        assert!(state.is_daemon_running());
 
         let record1 = RunHistoryRecord {
             timestamp: "2026-09-01T00:00:00Z".to_string(),

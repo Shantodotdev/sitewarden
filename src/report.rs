@@ -396,7 +396,7 @@ pub fn format_status_dashboard(
     let mut out = String::new();
     out.push('\n');
     out.push_str(&format!(
-        "{}┌────────────────────────── SiteWarden Daemon Status ──────────────────────────┐{}\n",
+        "{}┌───────────────────────── SiteWarden Service Status ──────────────────────────┐{}\n",
         GRAY, RESET
     ));
 
@@ -412,10 +412,64 @@ pub fn format_status_dashboard(
         )
     };
 
-    // 1. Status
-    let status_str = format!("{}🟢 Active (Scheduler Daemon){}", BOLD_GREEN, RESET);
-    let raw_status = "🟢 Active (Scheduler Daemon)";
-    out.push_str(&format_row("Status:", &status_str, raw_status));
+    // 1. Mode & Execution Posture
+    let (mode_display, mode_raw, sched_label, sched_display, sched_raw) =
+        if state.is_daemon_running() {
+            if let Some(ref started_at) = state.daemon_started_at {
+                if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
+                    let dur = chrono::Utc::now().signed_duration_since(dt);
+                    let days = dur.num_days();
+                    let hours = dur.num_hours() % 24;
+                    let mins = dur.num_minutes() % 60;
+                    let uptime = if days > 0 {
+                        format!("{}d {}h {}m", days, hours, mins)
+                    } else if hours > 0 {
+                        format!("{}h {}m", hours, mins)
+                    } else {
+                        format!("{}m", mins)
+                    };
+                    let pid_tag = if let Some(pid) = state.daemon_pid {
+                        format!(" (PID: {})", pid)
+                    } else {
+                        String::new()
+                    };
+                    (
+                        format!("{}🟢 Active Daemon{}{}", BOLD_GREEN, pid_tag, RESET),
+                        format!("🟢 Active Daemon{}", pid_tag),
+                        "Uptime & Cron:".to_string(),
+                        format!("Up {} (Cron: '{}')", uptime, config.schedule),
+                        format!("Up {} (Cron: '{}')", uptime, config.schedule),
+                    )
+                } else {
+                    (
+                        format!("{}🟢 Active Daemon{}", BOLD_GREEN, RESET),
+                        "🟢 Active Daemon".to_string(),
+                        "Schedule:".to_string(),
+                        format!("Cron: '{}'", config.schedule),
+                        format!("Cron: '{}'", config.schedule),
+                    )
+                }
+            } else {
+                (
+                    format!("{}🟢 Active Daemon{}", BOLD_GREEN, RESET),
+                    "🟢 Active Daemon".to_string(),
+                    "Schedule:".to_string(),
+                    format!("Cron: '{}'", config.schedule),
+                    format!("Cron: '{}'", config.schedule),
+                )
+            }
+        } else {
+            (
+                format!("{}⚪ Standalone CLI (Daemon inactive){}", BOLD_WHITE, RESET),
+                "⚪ Standalone CLI (Daemon inactive)".to_string(),
+                "Config Schedule:".to_string(),
+                format!("Cron: '{}' (Ready)", config.schedule),
+                format!("Cron: '{}' (Ready)", config.schedule),
+            )
+        };
+
+    out.push_str(&format_row("Execution Mode:", &mode_display, &mode_raw));
+    out.push_str(&format_row(&sched_label, &sched_display, &sched_raw));
 
     // 2. Version
     let (version_str, raw_version) = if let Some(up) = update_info {
@@ -443,32 +497,6 @@ pub fn format_status_dashboard(
         )
     };
     out.push_str(&format_row("Version:", &version_str, &raw_version));
-
-    // 3. Uptime
-    let uptime_str = if let Some(ref started_at) = state.daemon_started_at {
-        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
-            let dur = chrono::Utc::now().signed_duration_since(dt);
-            let days = dur.num_days();
-            let hours = dur.num_hours() % 24;
-            let mins = dur.num_minutes() % 60;
-            if days > 0 {
-                format!("{} days, {} hours, {} mins", days, hours, mins)
-            } else if hours > 0 {
-                format!("{} hours, {} mins", hours, mins)
-            } else {
-                format!("{} mins", mins)
-            }
-        } else {
-            "Active".to_string()
-        }
-    } else {
-        "Standalone CLI mode (Daemon state idle)".to_string()
-    };
-    out.push_str(&format_row("Uptime:", &uptime_str, &uptime_str));
-
-    // 4. Schedule
-    let sched_str = format!("Cron: '{}'", config.schedule);
-    out.push_str(&format_row("Schedule:", &sched_str, &sched_str));
 
     out.push_str(&format!(
         "{}├──────────────────────────────────────────────────────────────────────────────┤{}\n",
