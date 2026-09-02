@@ -41,8 +41,9 @@ RUN addgroup -S sitewarden && adduser -S sitewarden -G sitewarden -u 1000 \
     && mkdir -p /app/screenshots \
     && chown -R sitewarden:sitewarden /app
 
-# Copy compiled binary from builder stage to system PATH
+# Copy compiled binary and default template from builder stage
 COPY --from=builder /usr/src/sitewarden/target/release/sitewarden /usr/local/bin/sitewarden
+COPY --from=builder /usr/src/sitewarden/config.example.yaml /app/config.example.yaml
 RUN chmod +x /usr/local/bin/sitewarden && ln -s /usr/local/bin/sitewarden /app/sitewarden
 
 # Switch to non-root user

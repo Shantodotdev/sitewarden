@@ -68,9 +68,7 @@ impl BrowserManager {
         // Apply mandatory flags per SRS FR-3.1 & cloud VPS best practices:
         // - no_sandbox & disable_setuid_sandbox: needed for unprivileged Docker containers
         // - disable_dev_shm_usage: prevents /dev/shm shared memory crashes on low-resource VPS nodes
-        // - no-zygote & renderer-process-limit=2: prevents spawning hundreds of idle worker threads/PIDs
-        // - disable-gpu & disable-software-rasterizer: minimizes memory overhead
-        // - disk-cache-dir=/dev/null: eliminates temporary disk I/O caches
+        // - disable-gpu & use-gl=disabled: disables hardware GPU and software rasterizer fallback overhead
         // - js-flags: bounds V8 JavaScript runtime heap to 128MB
         // - headless=new: modern Chrome headless architecture supporting accurate viewport rendering
         // - window-size=1920,1080: standard desktop viewport preventing collapsed mobile UI layouts
@@ -79,9 +77,8 @@ impl BrowserManager {
             .arg("--disable-setuid-sandbox")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-gpu")
+            .arg("--use-gl=disabled")
             .arg("--disable-software-rasterizer")
-            .arg("--no-zygote")
-            .arg("--renderer-process-limit=2")
             .arg("--disk-cache-dir=/dev/null")
             .arg("--disk-cache-size=1")
             .arg("--media-cache-size=1")

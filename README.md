@@ -61,42 +61,63 @@ The script sets up `/opt/sitewarden`, initializes your `config.yaml`, sets permi
 
 ---
 
-## 🛠️ CLI Subcommand Reference
+## 🛠️ CLI Toolset & Management
 
-SiteWarden includes a complete interactive toolset:
+When installed via `install.sh`, SiteWarden provides a global host CLI tool:
 
 ```text
-sitewarden [OPTIONS] [COMMAND]
+sitewarden [COMMAND] [OPTIONS]
 ```
 
 ### 1. `sitewarden status`
-Displays the overall daemon health, uptime, total runs, success rate, and screenshot disk usage without digging into logs:
+Displays the overall daemon health, uptime, total runs, success rate, and screenshot disk usage:
 
 ```bash
-docker exec -it sitewarden sitewarden status
+sitewarden status
 ```
 ```text
-┌────────────────────────── SiteWarden Daemon Status ──────────────────────────┐
-│ Status:           🟢 Active (Scheduler Daemon)                            │
-│ Version:          v0.1.0 (Latest)                                         │
-│ Uptime:           4 days, 12 hours                                        │
-│ Schedule:         Cron: '0 0 6 * * *'                                     │
+┌───────────────────────── SiteWarden Service Status ──────────────────────────┐
+│ Execution Mode:   🟢 Active Daemon (PID: 1482)                               │
+│ Uptime & Cron:    Up 4d 12h (Cron: '0 0 6 * * *')                            │
+│ Version:          v0.1.0 (Latest)                                            │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ Total Cycles:     148 runs (146 Passed, 2 Failed • 98.6% Success Rate)   │
-│ Last Run:         2026-09-01 06:04:18 UTC (✅ Passed, 1366ms)             │
+│ Total Cycles:     148 runs (146 Passed, 2 Failed • 98.6% Success Rate)        │
+│ Last Run:         2026-09-01 06:04:18 UTC (✅ Passed, 1366ms)                  │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ Monitored Suites: 2 configured (2 tests, 8 steps)                         │
-│ Screenshots:      2 artifacts (1.42 MB) in /app/screenshots               │
+│ Monitored Suites: 2 configured (2 tests, 8 steps)                            │
+│ Screenshots:      2 artifacts (1.42 MB) in /opt/sitewarden/screenshots       │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### 2. `sitewarden history [--limit N]`
+### 2. `sitewarden test [SUITE]`
+Executes a specific test suite or all test suites immediately on demand:
+
+```bash
+# Run a specific suite
+sitewarden test "Example Domain Health Check"
+
+# Run all configured suites
+sitewarden test
+```
+
+---
+
+### 3. `sitewarden logs`
+Streams real-time structured logs from the background daemon:
+
+```bash
+sitewarden logs
+```
+
+---
+
+### 4. `sitewarden history [--limit N]`
 Displays a timeline of recent test cycles:
 
 ```bash
-docker exec -it sitewarden sitewarden history --limit 5
+sitewarden history --limit 5
 ```
 ```text
 ┌──────────────────────┬────────────────────────┬────────────┬──────────────┬────────────┐
@@ -110,11 +131,11 @@ docker exec -it sitewarden sitewarden history --limit 5
 
 ---
 
-### 3. `sitewarden check`
+### 5. `sitewarden check`
 Pre-flight verification for `config.yaml` syntax, cron expressions, CSS selectors, and target endpoint reachability:
 
 ```bash
-docker exec -it sitewarden sitewarden check
+sitewarden check
 ```
 ```text
 🔍 Validating configuration at: "config.yaml"
@@ -131,46 +152,35 @@ docker exec -it sitewarden sitewarden check
 
 ---
 
-### 4. `sitewarden test [SUITE]`
-Executes a specific test suite or all test suites immediately on demand:
+### 6. `sitewarden restart` / `start` / `stop`
+Convenient daemon lifecycle controls:
 
 ```bash
-# Run a specific suite
-docker exec -it sitewarden sitewarden test "Example Domain Health Check"
-
-# Run all configured suites
-docker exec -it sitewarden sitewarden test
+sitewarden restart
+sitewarden stop
+sitewarden start
 ```
 
 ---
 
-### 5. `sitewarden update [--check]`
-Queries the GitHub Releases API, compares semver, and prints the 1-command upgrade procedure:
-
-```bash
-docker exec -it sitewarden sitewarden update
-```
-
----
-
-### 6. `sitewarden prune [--days N] [--dry-run]`
+### 7. `sitewarden prune [--days N] [--dry-run]`
 Cleans up old failure screenshot artifacts from disk to prevent VPS storage leaks:
 
 ```bash
 # Simulate pruning screenshots older than 7 days
-docker exec -it sitewarden sitewarden prune --days 7 --dry-run
+sitewarden prune --days 7 --dry-run
 
 # Delete screenshots older than 14 days
-docker exec -it sitewarden sitewarden prune --days 14
+sitewarden prune --days 14
 ```
 
 ---
 
-### 7. `sitewarden doctor`
+### 8. `sitewarden doctor`
 Runs environment and diagnostic health checks (Chromium binary detection, screenshot directory permissions, network DNS):
 
 ```bash
-docker exec -it sitewarden sitewarden doctor
+sitewarden doctor
 ```
 
 ---
