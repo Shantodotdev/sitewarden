@@ -8,6 +8,7 @@ set -e
 
 REPO="Shantodotdev/sitewarden"
 INSTALL_DIR="/opt/sitewarden"
+BIN_DIR="/usr/local/bin"
 COMPOSE_URL="https://raw.githubusercontent.com/${REPO}/master/docker-compose.yml"
 CONFIG_URL="https://raw.githubusercontent.com/${REPO}/master/config.example.yaml"
 
@@ -38,7 +39,7 @@ if ! docker compose version &> /dev/null; then
 fi
 
 # 3. Create target directory and fix permissions
-echo -e "${BLUE}[1/4]${NC} 📁 Creating ${BOLD}${INSTALL_DIR}${NC} and setting up storage permissions..."
+echo -e "${BLUE}[1/5]${NC} 📁 Creating ${BOLD}${INSTALL_DIR}${NC} and setting up storage permissions..."
 if [ "$EUID" -ne 0 ]; then
     sudo mkdir -p "${INSTALL_DIR}/screenshots"
     sudo chown -R "$USER:$USER" "${INSTALL_DIR}"
@@ -51,7 +52,7 @@ fi
 cd "${INSTALL_DIR}"
 
 # 4. Download compose and config templates
-echo -e "${BLUE}[2/4]${NC} 📥 Downloading production configurations..."
+echo -e "${BLUE}[2/5]${NC} 📥 Downloading production configurations..."
 curl -fsSL "${COMPOSE_URL}" -o docker-compose.yml
 
 if [ ! -f config.yaml ]; then
