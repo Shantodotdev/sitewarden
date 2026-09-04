@@ -14,7 +14,7 @@ use sitewarden::doctor::run_diagnostics;
 use sitewarden::pruner::prune_screenshots;
 use sitewarden::report::{
     format_doctor_report, format_history_table, format_status_dashboard, BOLD_CYAN, BOLD_GREEN,
-    BOLD_RED, BOLD_WHITE, RESET,
+    BOLD_RED, BOLD_WHITE, BOLD_YELLOW, RESET,
 };
 use sitewarden::scheduler::{run_all_suites, run_named_suite, start_scheduler};
 use sitewarden::state::{resolve_state_path, AppState};
@@ -86,6 +86,21 @@ enum Commands {
     },
     /// Run diagnostic environment and health checks
     Doctor,
+    /// Test or manage alerting channels (e.g. SMTP email)
+    Alert {
+        #[command(subcommand)]
+        action: AlertCommands,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum AlertCommands {
+    /// Send a test alert email to verify SMTP configuration
+    Test {
+        /// Optional recipient override for the test email
+        #[arg(short, long)]
+        to: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -121,6 +136,7 @@ async fn main() -> Result<()> {
         Some(Commands::Update { check }) => handle_update(check).await,
         Some(Commands::Prune { days, dry_run }) => handle_prune(&config_path, days, dry_run),
         Some(Commands::Doctor) => handle_doctor(&config_path).await,
+        Some(Commands::Alert { action }) => handle_alert(&config_path, action).await,
         Some(Commands::Daemon) | None => {
             if cli.run_once {
                 handle_test(&config_path, None).await
@@ -167,31 +183,47 @@ fn resolve_config_path(specified: Option<&Path>) -> PathBuf {
         }
     }
 
-    // 3. Persistent state memory from previous executions
+    // 3. Persistent state memory from previous executions (unless it was an example template)
     let state = AppState::load(&default_state_path);
     if let Some(ref remembered) = state.last_config_path {
-        let p = PathBuf::from(remembered);
-        if p.exists() {
-            return p;
+        let is_example =
+            remembered.ends_with("example.yaml") || remembered.ends_with("example.yml");
+        if !is_example {
+            let p = PathBuf::from(remembered);
+            if p.exists() {
+                return p;
+            }
         }
     }
 
     // 4. Standard search paths
     let candidates = [
+        "config.local.yaml",
+        "config.local.yml",
         "config.yaml",
         "config.yml",
         ".sitewarden.yaml",
         ".sitewarden.yml",
         "sitewarden.yaml",
         "sitewarden.yml",
+        "config/config.local.yaml",
+        "config/config.local.yml",
         "config/config.yaml",
         "config/config.yml",
+        "/app/config/config.local.yaml",
+        "/app/config/config.local.yml",
         "/app/config/config.yaml",
         "/app/config/config.yml",
+        "/app/config.local.yaml",
+        "/app/config.local.yml",
         "/app/config.yaml",
         "/app/config.yml",
+        "/opt/sitewarden/config.local.yaml",
+        "/opt/sitewarden/config.local.yml",
         "/opt/sitewarden/config.yaml",
         "/opt/sitewarden/config.yml",
+        "/etc/sitewarden/config.local.yaml",
+        "/etc/sitewarden/config.local.yml",
         "/etc/sitewarden/config.yaml",
         "/etc/sitewarden/config.yml",
         "config.example.yaml",
@@ -400,7 +432,7 @@ async fn handle_test(config_path: &Path, suite_name: Option<String>) -> Result<(
     };
 
     let shared_config = Arc::new(ArcSwap::from_pointee(config));
-    let alert_dispatcher = AlertDispatcher::new();
+    let alert_dispatcher = AlertDispatcher::with_config(Arc::clone(&shared_config));
 
     let passed = if let Some(ref name) = suite_name {
         run_named_suite(name, &shared_config, &alert_dispatcher).await
@@ -576,7 +608,7 @@ async fn run_daemon(config_path: &Path, _verbose: bool) -> Result<()> {
     let _ = state.save(&state_path);
 
     let shared_config = Arc::new(ArcSwap::from_pointee(initial_config));
-    let alert_dispatcher = AlertDispatcher::new();
+    let alert_dispatcher = AlertDispatcher::with_config(Arc::clone(&shared_config));
 
     // Initialize Config Watcher for zero-downtime hot-reloading
     let (_watcher, mut reload_rx) =
@@ -669,6 +701,111 @@ async fn run_daemon(config_path: &Path, _verbose: bool) -> Result<()> {
                             error!(error = %err, "Failed to reschedule with new cron expression");
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Subcommand: `sitewarden alert test [--to <recipient>]`
+///
+/// Sends an SMTP test email using the configured email alerting parameters
+/// to verify server connectivity, authentication, and recipient deliverability.
+async fn handle_alert(config_path: &Path, action: AlertCommands) -> Result<()> {
+    match action {
+        AlertCommands::Test { to } => {
+            println!(
+                "\n📧 {}Testing SiteWarden Email Alert System...{}",
+                BOLD_CYAN, RESET
+            );
+
+            if !config_path.exists() {
+                eprintln!(
+                    "{}❌ Configuration file not found at: {:?}{}",
+                    BOLD_RED, config_path, RESET
+                );
+                std::process::exit(1);
+            }
+
+            let config = match AppConfig::from_file(config_path) {
+                Ok(c) => c,
+                Err(err) => {
+                    eprintln!(
+                        "{}❌ Failed to load configuration: {:#}{}",
+                        BOLD_RED, err, RESET
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            let email_config = match config.alerts.and_then(|a| a.email) {
+                Some(email) if email.enabled => email,
+                Some(_) => {
+                    eprintln!(
+                        "{}⚠️ Email alerting is configured but disabled ('enabled: false') in {:?}.{}",
+                        BOLD_YELLOW, config_path, RESET
+                    );
+                    eprintln!("  Set 'enabled: true' under 'alerts.email' to enable email notifications.\n");
+                    std::process::exit(1);
+                }
+                None => {
+                    eprintln!(
+                        "{}⚠️ No email alert configuration ('alerts.email') found in {:?}.{}",
+                        BOLD_YELLOW, config_path, RESET
+                    );
+                    eprintln!(
+                        "  Add an 'alerts.email' section to your configuration to enable alerts.\n"
+                    );
+                    std::process::exit(1);
+                }
+            };
+
+            let recipient_display = if let Some(ref override_to) = to {
+                override_to.clone()
+            } else {
+                email_config.to.join(", ")
+            };
+
+            println!(
+                "  • SMTP Host:  {}:{}",
+                email_config.smtp_host, email_config.smtp_port
+            );
+            println!("  • Encryption: {:?}", email_config.encryption);
+            println!("  • Sender:     {}", email_config.from);
+            println!("  • Recipient:  {}", recipient_display);
+            println!("  • Dispatching test email via SMTP...");
+
+            match sitewarden::alert::send_test_email(&email_config, to.as_deref()).await {
+                Ok(()) => {
+                    println!(
+                        "\n{}✅ Test alert email delivered successfully!{}",
+                        BOLD_GREEN, RESET
+                    );
+                    println!(
+                        "  Check your inbox ({}) to verify arrival.\n",
+                        recipient_display
+                    );
+                }
+                Err(err) => {
+                    eprintln!(
+                        "\n{}❌ Failed to deliver test email: {:#}{}",
+                        BOLD_RED, err, RESET
+                    );
+                    let err_str = err.to_string().to_lowercase();
+                    if err_str.contains("535")
+                        || err_str.contains("authentication")
+                        || err_str.contains("credentials")
+                    {
+                        eprintln!("\n{}💡 Troubleshooting Guidance:{}", BOLD_WHITE, RESET);
+                        eprintln!(
+                            "  • If using Gmail, primary account passwords are not accepted."
+                        );
+                        eprintln!("    Generate a 16-character App Password at: https://myaccount.google.com/apppasswords");
+                        eprintln!("  • For Microsoft / Outlook 365, ensure SMTP AUTH is permitted on your mailbox.");
+                    }
+                    std::process::exit(1);
                 }
             }
         }

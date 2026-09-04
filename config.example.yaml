@@ -9,6 +9,26 @@ browser_concurrency: 2
 timeout_seconds: 30
 screenshot_dir: "screenshots"
 
+# Automated Alerting & Notifications (Optional)
+# alerts:
+#   email:
+#     enabled: true
+#     smtp_host: "smtp.gmail.com"
+#     smtp_port: 587
+#     encryption: "starttls"        # "starttls" (port 587), "tls" (port 465), or "none" (port 25)
+#     username: "alerts@example.com"
+#     # ⚠️ SECURITY NOTICE:
+#     # Never enter your primary email account password here!
+#     # Generate a dedicated 16-character App Password:
+#     # - Gmail: https://myaccount.google.com/apppasswords
+#     # - Outlook / Office 365: https://account.live.com/proofs/manage/additional
+#     # You can also pass via environment: password: "${SITEWARDEN_SMTP_PASSWORD}"
+#     password: "xxxx xxxx xxxx xxxx"
+#     from: "SiteWarden Sentinel <alerts@example.com>"
+#     to:
+#       - "devops@example.com"
+#     attach_screenshot: true       # Attach captured failure PNG screenshots to alert emails
+
 # Declarative Test Suites
 suites:
   - name: "Example Domain Health Check"

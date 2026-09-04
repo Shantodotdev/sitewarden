@@ -57,8 +57,10 @@ curl -fsSL "${COMPOSE_URL}" -o docker-compose.yml
 
 if [ ! -f config.yaml ]; then
     curl -fsSL "${CONFIG_URL}" -o config.yaml
-    echo -e "      ${GREEN}✓ Created default config.yaml${NC}"
+    chmod 600 config.yaml
+    echo -e "      ${GREEN}✓ Created default config.yaml (permissions: 600)${NC}"
 else
+    chmod 600 config.yaml 2>/dev/null || true
     echo -e "      ${YELLOW}ℹ Existing config.yaml preserved${NC}"
 fi
 
