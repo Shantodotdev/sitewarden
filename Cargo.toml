@@ -27,6 +27,7 @@ url = "2.5"
 validator = { version = "0.20", features = ["derive"] }
 scraper = "0.23"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+lettre = { version = "0.11", default-features = false, features = ["tokio1", "tokio1-rustls-tls", "smtp-transport", "builder", "tracing"] }
 unicode-width = "0.2"
 
 [dev-dependencies]

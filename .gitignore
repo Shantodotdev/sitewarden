@@ -8,3 +8,11 @@ sitewarden.json
 state.json
 *.tmp
 
+# Local configurations and credentials (never commit to git)
+config.yaml
+config.yml
+config.local.yaml
+config.local.yml
+*.local.yaml
+*.local.yml
+*.env
