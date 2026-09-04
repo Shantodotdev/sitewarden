@@ -282,10 +282,11 @@ async fn run_suite(
         .collect()
         .await;
 
-    // Count results
+    // Count results and aggregate failures
     let mut passed_count = 0;
     let mut failed_count = 0;
     let mut suite_success = true;
+    let mut failed_test_details = Vec::new();
 
     for result in &results {
         if result.success {
@@ -293,6 +294,23 @@ async fn run_suite(
         } else {
             suite_success = false;
             failed_count += 1;
+            if let Some(ref failure) = result.failure {
+                failed_test_details.push(crate::alert::FailedTestDetail {
+                    test_name: result.test_name.clone(),
+                    step_index: failure.step_index,
+                    action_type: failure.action_type.clone(),
+                    error_message: failure.error_message.clone(),
+                    screenshot_path: failure.screenshot_path.clone(),
+                });
+            } else {
+                failed_test_details.push(crate::alert::FailedTestDetail {
+                    test_name: result.test_name.clone(),
+                    step_index: 0,
+                    action_type: "unknown".to_string(),
+                    error_message: "Test case failed without detailed step failure".to_string(),
+                    screenshot_path: None,
+                });
+            }
         }
     }
 
@@ -308,7 +326,10 @@ async fn run_suite(
 
         let alert = FailureAlert {
             suite_name: suite.name.clone(),
+            base_url: suite.base_url.clone(),
             failed_count,
+            total_tests: suite.tests.len(),
+            failed_tests: failed_test_details,
         };
 
         alert_dispatcher.dispatch(&alert).await;

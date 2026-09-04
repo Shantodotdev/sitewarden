@@ -24,6 +24,7 @@ pub const MAGENTA: &str = "\x1b[35m";
 pub const CYAN: &str = "\x1b[36m";
 pub const BOLD_RED: &str = "\x1b[1;31m";
 pub const BOLD_GREEN: &str = "\x1b[1;32m";
+pub const BOLD_YELLOW: &str = "\x1b[1;33m";
 pub const BOLD_CYAN: &str = "\x1b[1;36m";
 pub const BOLD_WHITE: &str = "\x1b[1;37m";
 pub const GRAY: &str = "\x1b[90m";
@@ -819,6 +820,7 @@ mod tests {
             browser_concurrency: 2,
             timeout_seconds: 30,
             screenshot_dir: "/app/screenshots".to_string(),
+            alerts: None,
             suites: vec![],
         };
 
