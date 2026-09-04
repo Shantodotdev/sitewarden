@@ -81,6 +81,11 @@ pub struct AppConfig {
     #[serde(default = "default_screenshot_dir")]
     pub screenshot_dir: String,
 
+    /// Optional notification and alerting channels.
+    #[serde(default)]
+    #[validate(nested)]
+    pub alerts: Option<AlertConfig>,
+
     /// Configured test suites to execute.
     #[validate(length(min = 1), nested)]
     #[serde(default)]
@@ -99,6 +104,14 @@ fn default_screenshot_dir() -> String {
     DEFAULT_SCREENSHOT_DIR.to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_smtp_port() -> u16 {
+    587
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -106,9 +119,95 @@ impl Default for AppConfig {
             browser_concurrency: DEFAULT_BROWSER_CONCURRENCY,
             timeout_seconds: DEFAULT_TIMEOUT_SECONDS,
             screenshot_dir: DEFAULT_SCREENSHOT_DIR.to_string(),
+            alerts: None,
             suites: Vec::new(),
         }
     }
+}
+
+/// Encryption mode for SMTP transport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpEncryption {
+    /// STARTTLS (typically on port 587). Connects plaintext, upgrades to TLS.
+    #[default]
+    StartTls,
+    /// Direct TLS / SSL connection (typically on port 465).
+    Tls,
+    /// Unencrypted plaintext connection (typically on port 25 or local relay).
+    None,
+}
+
+/// Email alert configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct EmailAlertConfig {
+    /// Whether email alerting is enabled.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// SMTP server hostname (e.g. `smtp.gmail.com`).
+    #[validate(length(min = 1))]
+    pub smtp_host: String,
+
+    /// SMTP server port (e.g. 587, 465, or 25).
+    #[serde(default = "default_smtp_port")]
+    pub smtp_port: u16,
+
+    /// Encryption mode (`starttls`, `tls`, or `none`).
+    #[serde(default)]
+    pub encryption: SmtpEncryption,
+
+    /// Optional SMTP username for authentication (e.g., your email address).
+    #[serde(default)]
+    pub username: Option<String>,
+
+    /// Optional SMTP password or App Password.
+    /// Supports direct values or environment variable expansion `${VAR_NAME}`.
+    #[serde(default)]
+    pub password: Option<String>,
+
+    /// Sender address (e.g. `SiteWarden Alerts <alerts@example.com>`).
+    #[validate(length(min = 1))]
+    pub from: String,
+
+    /// One or more recipient email addresses.
+    #[validate(length(min = 1))]
+    pub to: Vec<String>,
+
+    /// Whether to attach captured failure screenshot PNGs to alert emails.
+    #[serde(default = "default_true")]
+    pub attach_screenshot: bool,
+}
+
+impl EmailAlertConfig {
+    /// Resolves the SMTP password, expanding `${ENV_VAR}` syntax or falling back
+    /// to `SITEWARDEN_SMTP_PASSWORD` if not explicitly specified.
+    pub fn resolve_password(&self) -> Option<String> {
+        if let Some(ref pwd) = self.password {
+            let trimmed = pwd.trim();
+            if trimmed.starts_with("${") && trimmed.ends_with('}') {
+                let var_name = &trimmed[2..trimmed.len() - 1];
+                std::env::var(var_name).ok()
+            } else if !trimmed.is_empty() {
+                Some(trimmed.to_string())
+            } else {
+                std::env::var("SITEWARDEN_SMTP_PASSWORD").ok()
+            }
+        } else {
+            std::env::var("SITEWARDEN_SMTP_PASSWORD").ok()
+        }
+    }
+}
+
+/// Notification and alerting configurations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Validate, Default)]
+#[serde(deny_unknown_fields)]
+pub struct AlertConfig {
+    /// Email alert configuration channel.
+    #[serde(default)]
+    #[validate(nested)]
+    pub email: Option<EmailAlertConfig>,
 }
 
 /// A suite of related test cases targeting a specific base URL.
@@ -233,6 +332,42 @@ impl AppConfig {
             return Err(ConfigError::Validation(
                 "screenshot_dir contains invalid null character".to_string(),
             ));
+        }
+
+        // Validate alerts if configured
+        if let Some(ref alerts) = self.alerts {
+            if let Some(ref email) = alerts.email {
+                if email.smtp_host.trim().is_empty() {
+                    return Err(ConfigError::Validation(
+                        "alerts.email.smtp_host cannot be empty".to_string(),
+                    ));
+                }
+                if email.smtp_port == 0 {
+                    return Err(ConfigError::Validation(
+                        "alerts.email.smtp_port must be a valid non-zero port (e.g. 587, 465, or 25)"
+                            .to_string(),
+                    ));
+                }
+                if email.from.trim().is_empty() {
+                    return Err(ConfigError::Validation(
+                        "alerts.email.from cannot be empty".to_string(),
+                    ));
+                }
+                if email.to.is_empty() {
+                    return Err(ConfigError::Validation(
+                        "alerts.email.to must contain at least one recipient email address"
+                            .to_string(),
+                    ));
+                }
+                for (idx, to_addr) in email.to.iter().enumerate() {
+                    if to_addr.trim().is_empty() {
+                        return Err(ConfigError::Validation(format!(
+                            "alerts.email.to[{}] cannot be empty",
+                            idx
+                        )));
+                    }
+                }
+            }
         }
 
         // Validate uniqueness of suite names

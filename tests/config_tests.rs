@@ -332,3 +332,124 @@ fn test_css_selector_validator_unit() {
     assert!(validate_css_selector(":nth-child(not-a-number)").is_err()); // invalid pseudo formula
     assert!(validate_css_selector(":not()").is_err()); // empty pseudo negation
 }
+
+#[test]
+fn test_valid_email_alert_config() {
+    let yaml = r#"
+schedule: "0 0 6 * * *"
+alerts:
+  email:
+    enabled: true
+    smtp_host: "smtp.gmail.com"
+    smtp_port: 587
+    encryption: "starttls"
+    username: "alerts@example.com"
+    password: "test-app-password"
+    from: "SiteWarden Alerts <alerts@example.com>"
+    to:
+      - "devops@example.com"
+      - "lead@example.com"
+    attach_screenshot: true
+suites:
+  - name: "S1"
+    base_url: "https://example.com"
+    tests:
+      - name: "T1"
+        steps:
+          - action: navigate
+            path: "/"
+"#;
+
+    let config = AppConfig::from_yaml_str(yaml).expect("Failed to parse valid alert config");
+    assert!(config.alerts.is_some());
+    let alerts = config.alerts.unwrap();
+    assert!(alerts.email.is_some());
+    let email = alerts.email.unwrap();
+    assert!(email.enabled);
+    assert_eq!(email.smtp_host, "smtp.gmail.com");
+    assert_eq!(email.smtp_port, 587);
+    assert_eq!(
+        email.encryption,
+        sitewarden::config::SmtpEncryption::StartTls
+    );
+    assert_eq!(email.username.as_deref(), Some("alerts@example.com"));
+    assert_eq!(
+        email.resolve_password().as_deref(),
+        Some("test-app-password")
+    );
+    assert_eq!(email.from, "SiteWarden Alerts <alerts@example.com>");
+    assert_eq!(email.to, vec!["devops@example.com", "lead@example.com"]);
+    assert!(email.attach_screenshot);
+}
+
+#[test]
+fn test_alert_password_env_var_resolution() {
+    std::env::set_var("TEST_ALERT_SECRET", "super-secret-token");
+
+    let yaml = r#"
+schedule: "0 0 6 * * *"
+alerts:
+  email:
+    smtp_host: "smtp.example.com"
+    password: "${TEST_ALERT_SECRET}"
+    from: "alerts@example.com"
+    to:
+      - "admin@example.com"
+suites:
+  - name: "S1"
+    base_url: "https://example.com"
+    tests:
+      - name: "T1"
+        steps:
+          - action: navigate
+            path: "/"
+"#;
+
+    let config = AppConfig::from_yaml_str(yaml).expect("Failed to parse config with env password");
+    let email = config.alerts.unwrap().email.unwrap();
+    assert_eq!(
+        email.resolve_password().as_deref(),
+        Some("super-secret-token")
+    );
+}
+
+#[test]
+fn test_invalid_email_alert_config() {
+    // Missing smtp_host
+    let yaml_empty_host = r#"
+schedule: "0 0 6 * * *"
+alerts:
+  email:
+    smtp_host: ""
+    from: "alerts@example.com"
+    to: ["admin@example.com"]
+suites:
+  - name: "S1"
+    base_url: "https://example.com"
+    tests:
+      - name: "T1"
+        steps:
+          - action: navigate
+            path: "/"
+"#;
+    assert!(AppConfig::from_yaml_str(yaml_empty_host).is_err());
+
+    // Empty 'to' list
+    let yaml_empty_to = r#"
+schedule: "0 0 6 * * *"
+alerts:
+  email:
+    smtp_host: "smtp.example.com"
+    from: "alerts@example.com"
+    to: []
+suites:
+  - name: "S1"
+    base_url: "https://example.com"
+    tests:
+      - name: "T1"
+        steps:
+          - action: navigate
+            path: "/"
+"#;
+    assert!(AppConfig::from_yaml_str(yaml_empty_to).is_err());
+}
